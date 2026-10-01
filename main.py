@@ -13,22 +13,33 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 BALE_BOT_TOKEN = os.getenv("BALE_BOT_TOKEN")
 BALE_CHAT_ID = os.getenv("BALE_CHAT_ID")
 
-# RSS های فناوری
+CHECK_INTERVAL = 10 * 60       # بررسی اخبار هر 10 دقیقه
+POST_INTERVAL = 60 * 60        # انتشار حداکثر هر 1 ساعت
+
 RSS_FEEDS = [
     "https://techcrunch.com/feed/",
     "https://www.theverge.com/rss/index.xml",
-    "https://www.wired.com/feed/rss",
+    "https://www.wired.com/feed/rss"
 ]
 
-# هر چند دقیقه RSS بررسی شود
-CHECK_INTERVAL = 10
-
-# حداقل فاصله بین دو پست
-POST_INTERVAL = 60 * 60
-
-# فایل های وضعیت
 STATE_FILE = "state.txt"
 USED_NEWS_FILE = "used_news.txt"
+
+# =========================
+# بررسی تنظیمات
+# =========================
+
+if not GROQ_API_KEY:
+    print("❌ GROQ_API_KEY تنظیم نشده است.")
+    exit()
+
+if not BALE_BOT_TOKEN:
+    print("❌ BALE_BOT_TOKEN تنظیم نشده است.")
+    exit()
+
+if not BALE_CHAT_ID:
+    print("❌ BALE_CHAT_ID تنظیم نشده است.")
+    exit()
 
 # =========================
 # اتصال به Groq
@@ -39,95 +50,99 @@ client = OpenAI(
     base_url="https://api.groq.com/openai/v1"
 )
 
-
 # =========================
-# وضعیت آخرین پست
+# ابزارهای کمکی
 # =========================
 
-def load_last_post_time():
+def get_last_post_time():
     try:
-        with open(STATE_FILE, "r", encoding="utf-8") as f:
+        with open(STATE_FILE, "r") as f:
             return float(f.read().strip())
-    except Exception:
+    except:
         return 0
 
 
 def save_last_post_time():
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
+    with open(STATE_FILE, "w") as f:
         f.write(str(time.time()))
 
 
-# =========================
-# دریافت اخبار از RSS
-# =========================
-
-def get_news():
-    news = []
-
-    for rss_url in RSS_FEEDS:
-        try:
-            print(f"Checking RSS: {rss_url}")
-
-            feed = feedparser.parse(rss_url)
-
-            for entry in feed.entries[:10]:
-                title = entry.get("title", "").strip()
-                link = entry.get("link", "").strip()
-                summary = entry.get("summary", "").strip()
-
-                if title and link:
-                    news.append({
-                        "title": title,
-                        "link": link,
-                        "summary": summary
-                    })
-
-        except Exception as e:
-            print(f"RSS Error: {e}")
-
-    return news
-
-
-# =========================
-# شناسه خبر
-# =========================
-
-def get_news_id(news):
-    raw = news["link"] or news["title"]
-    return hashlib.md5(raw.encode("utf-8")).hexdigest()
-
-
-# =========================
-# بررسی خبر تکراری
-# =========================
-
-def is_used(news_id):
+def get_used_news():
     try:
         with open(USED_NEWS_FILE, "r", encoding="utf-8") as f:
-            return news_id in f.read().splitlines()
+            return set(line.strip() for line in f if line.strip())
+    except:
+        return set()
 
-    except FileNotFoundError:
-        return False
 
-
-def mark_used(news_id):
+def save_used_news(news_id):
     with open(USED_NEWS_FILE, "a", encoding="utf-8") as f:
         f.write(news_id + "\n")
 
 
+def make_news_id(link, title):
+    value = link + title
+    return hashlib.md5(value.encode("utf-8")).hexdigest()
+
+
 # =========================
-# انتخاب خبر جدید
+# دریافت اخبار
 # =========================
 
-def choose_news(news_list):
-    for news in news_list:
+def get_news():
 
-        news_id = get_news_id(news)
+    print("===================================")
+    print("در حال دریافت اخبار...")
+    print("===================================")
 
-        if not is_used(news_id):
-            return news
+    used_news = get_used_news()
 
-    return None
+    all_news = []
+
+    for feed_url in RSS_FEEDS:
+
+        try:
+            print(f"Checking RSS: {feed_url}")
+
+            feed = feedparser.parse(feed_url)
+
+            for entry in feed.entries[:10]:
+
+                title = entry.get("title", "").strip()
+                link = entry.get("link", "").strip()
+                summary = entry.get("summary", "").strip()
+
+                if not title or not link:
+                    continue
+
+                news_id = make_news_id(link, title)
+
+                if news_id in used_news:
+                    continue
+
+                all_news.append({
+                    "id": news_id,
+                    "title": title,
+                    "link": link,
+                    "summary": summary
+                })
+
+        except Exception as e:
+            print(f"❌ RSS Error: {e}")
+
+    if not all_news:
+        print("❌ خبر جدیدی پیدا نشد.")
+        return None
+
+    # اولین خبر جدید
+    news = all_news[0]
+
+    print("===================================")
+    print("خبر انتخاب شد:")
+    print(news["title"])
+    print("===================================")
+
+    return news
 
 
 # =========================
@@ -136,166 +151,195 @@ def choose_news(news_list):
 
 def rewrite_news(news):
 
+    print("در حال بازنویسی خبر با Groq...")
+    print("===================================")
+
     prompt = f"""
-تو سردبیر یک کانال فناوری فارسی به نام «فناوری‌یار» هستی.
+تو نویسنده کانال فناوری فارسی «فناوری‌یار» هستی.
 
-خبر زیر را به یک پست فارسی جذاب، کوتاه و حرفه‌ای برای کانال بله تبدیل کن.
+خبر زیر را به یک پست جذاب و حرفه‌ای فارسی برای کانال بله تبدیل کن.
 
-قوانین مهم:
+قوانین:
 
-- ترجمه تحت‌اللفظی نکن.
-- متن را روان و طبیعی به فارسی بنویس.
-- اطلاعات اصلی خبر را حفظ کن.
-- هیچ اطلاعاتی که در خبر وجود ندارد اضافه نکن.
-- تیتر کوتاه و جذاب باشد.
-- متن حدود 100 تا 180 کلمه باشد.
-- لحن خبری، صمیمی و قابل فهم باشد.
-- از ایموجی به اندازه استفاده کن.
-- در پایان 4 تا 6 هشتگ مرتبط قرار بده.
-- لینک منبع را در انتهای پست قرار بده.
-- از عبارت «فناوری‌یار» در متن استفاده نکن، مگر در امضای پایانی.
-
-ساختار پیشنهادی:
-
-🔥 تیتر خبر
-
-متن خبر...
-
-🔗 منبع:
-لینک
-
-#فناوری #هوش_مصنوعی #تکنولوژی
+1. متن فارسی روان و طبیعی باشد.
+2. اصل خبر را تغییر نده.
+3. اطلاعاتی که در خبر وجود ندارد اضافه نکن.
+4. متن حدود 100 تا 180 کلمه باشد.
+5. شروع متن جذاب باشد.
+6. از ایموجی‌های مناسب استفاده کن.
+7. در پایان 4 تا 6 هشتگ مرتبط قرار بده.
+8. لینک منبع خبر را در پایان قرار بده.
+9. عبارت «فناوری‌یار» فقط در امضای پایانی استفاده شود.
+10. متن برای انتشار مستقیم در کانال آماده باشد.
+11. از عبارت‌هایی مثل «طبق درخواست شما» یا توضیح درباره نحوه تولید متن استفاده نکن.
 
 عنوان خبر:
 {news["title"]}
 
-خلاصه خبر:
+خلاصه / متن خبر:
 {news["summary"]}
 
-لینک:
+لینک منبع:
 {news["link"]}
+
+فرمت خروجی:
+
+🚀 [عنوان جذاب]
+
+[متن خبر]
+
+🔗 منبع:
+{news["link"]}
+
+#فناوری #تکنولوژی #هوش_مصنوعی
+
+— فناوری‌یار
 """
 
-    print("در حال بازنویسی خبر با Groq...")
-
-    response = client.responses.create(
-        model="llama-3.3-70b-versatile",
-        input=prompt
+    response = client.chat.completions.create(
+        model="openai/gpt-oss-120b",
+        messages=[
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        temperature=0.7,
+        max_tokens=700
     )
 
-    return response.output_text.strip()
+    rewritten = response.choices[0].message.content.strip()
+
+    print("===================================")
+    print("✅ بازنویسی با موفقیت انجام شد.")
+    print("===================================")
+
+    return rewritten
 
 
 # =========================
-# ارسال پیام به بله
+# ارسال به بله
 # =========================
 
 def send_to_bale(message):
 
+    print("در حال ارسال به بله...")
+
     url = f"https://tapi.bale.ai/bot{BALE_BOT_TOKEN}/sendMessage"
 
-    data = {
+    payload = {
         "chat_id": BALE_CHAT_ID,
         "text": message
     }
 
-    response = requests.post(
-        url,
-        data=data,
-        timeout=30
-    )
+    try:
 
-    print("Bale response:", response.text)
+        response = requests.post(
+            url,
+            json=payload,
+            timeout=30
+        )
 
-    if response.ok:
+        print("BALE STATUS:", response.status_code)
 
-        try:
-            result = response.json()
+        if response.status_code == 200:
 
-            if result.get("ok"):
+            data = response.json()
+
+            if data.get("ok") is True:
+
+                print("===================================")
+                print("✅ پست با موفقیت در بله منتشر شد.")
+                print("===================================")
+
                 return True
 
-        except Exception:
-            pass
+        print("❌ ارسال به بله ناموفق بود.")
+        print(response.text)
 
-    return False
+        return False
+
+    except Exception as e:
+
+        print("❌ Bale Error:", e)
+
+        return False
 
 
 # =========================
-# پردازش خبر
+# اجرای اصلی
 # =========================
 
-def process_news():
+print("===================================")
+print("🚀 فناوری‌یار شروع شد.")
+print("🤖 AI Engine: Groq")
+print("📰 RSS: Active")
+print("📢 Bale: Active")
+print("⏰ فاصله انتشار: 1 ساعت")
+print("===================================")
 
-    last_post = load_last_post_time()
-
-    # هنوز یک ساعت از پست قبلی نگذشته
-    if time.time() - last_post < POST_INTERVAL:
-
-        remaining = int(
-            POST_INTERVAL - (time.time() - last_post)
-        )
-
-        print(
-            f"هنوز زمان پست بعدی نرسیده. "
-            f"حدود {remaining // 60} دقیقه باقی مانده."
-        )
-
-        return
-
-    print("===================================")
-    print("در حال دریافت اخبار...")
-    print("===================================")
-
-    news_list = get_news()
-
-    if not news_list:
-
-        print("هیچ خبری پیدا نشد.")
-
-        return
-
-    news = choose_news(news_list)
-
-    if not news:
-
-        print("خبر جدیدی پیدا نشد.")
-
-        return
-
-    print("===================================")
-    print("خبر انتخاب شد:")
-    print(news["title"])
-    print("===================================")
+while True:
 
     try:
 
-        final_text = rewrite_news(news)
+        last_post = get_last_post_time()
+        current_time = time.time()
 
-        print("===================================")
-        print("متن تولید شده:")
-        print(final_text)
-        print("===================================")
+        # اگر هنوز یک ساعت از پست قبلی نگذشته
+        if current_time - last_post < POST_INTERVAL:
 
-        print("در حال ارسال به بله...")
+            remaining = int(
+                POST_INTERVAL - (current_time - last_post)
+            )
 
-        success = send_to_bale(final_text)
+            minutes = remaining // 60
+
+            print(
+                f"⏳ هنوز زمان انتشار نرسیده. "
+                f"حدود {minutes} دقیقه باقی مانده."
+            )
+
+            time.sleep(CHECK_INTERVAL)
+            continue
+
+        # دریافت خبر
+        news = get_news()
+
+        if not news:
+
+            print(
+                "بررسی بعدی 10 دقیقه دیگر..."
+            )
+
+            time.sleep(CHECK_INTERVAL)
+            continue
+
+        # بازنویسی
+        rewritten = rewrite_news(news)
+
+        # ارسال به بله
+        success = send_to_bale(rewritten)
 
         if success:
 
-            news_id = get_news_id(news)
-
-            mark_used(news_id)
-
+            save_used_news(news["id"])
             save_last_post_time()
 
-            print("===================================")
-            print("✅ پست با موفقیت منتشر شد.")
-            print("===================================")
+            print(
+                "🎉 چرخه انتشار با موفقیت انجام شد."
+            )
 
         else:
 
-            print("❌ ارسال به بله ناموفق بود.")
+            print(
+                "⚠️ ارسال انجام نشد؛ خبر به عنوان استفاده‌شده ثبت نشد."
+            )
+
+        print(
+            "بررسی بعدی 10 دقیقه دیگر..."
+        )
+
+        time.sleep(CHECK_INTERVAL)
 
     except Exception as e:
 
@@ -304,34 +348,34 @@ def process_news():
         print(e)
         print("===================================")
 
-
-# =========================
-# اجرای برنامه
-# =========================
-
-if __name__ == "__main__":
-
-    print("===================================")
-    print("🚀 فناوری‌یار شروع شد.")
-    print("🤖 AI Engine: Groq")
-    print("📰 RSS: Active")
-    print("📢 Bale: Active")
-    print("⏰ فاصله انتشار: 1 ساعت")
-    print("===================================")
-
-    while True:
-
-        try:
-
-            process_news()
-
-        except Exception as e:
-
-            print("MAIN ERROR:")
-            print(e)
-
         print(
-            f"بررسی بعدی {CHECK_INTERVAL} دقیقه دیگر..."
+            "بررسی بعدی 10 دقیقه دیگر..."
         )
 
-        time.sleep(CHECK_INTERVAL * 60)
+        time.sleep(CHECK_INTERVAL)
+
+"requirements.txt" هم همان قبلی باشد:
+
+openai
+feedparser
+requests
+
+بعد در GitHub:
+
+1. "main.py" را کامل پاک کن.
+2. همین کد را کامل Paste کن.
+3. Save/Commit کن.
+4. Render باید Deploy جدید را شروع کند.
+5. در Logs دنبال این قسمت باش:
+
+در حال بازنویسی خبر با Groq...
+===================================
+✅ بازنویسی با موفقیت انجام شد.
+
+و بعد:
+
+در حال ارسال به بله...
+===================================
+✅ پست با موفقیت در بله منتشر شد.
+
+نکته: "GROQ_API_KEY"، "BALE_BOT_TOKEN" و "BALE_CHAT_ID" را تغییر نده. کل مشکل فعلی مدل Groq بود، نه کلیدها.
