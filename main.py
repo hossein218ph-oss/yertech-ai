@@ -1,246 +1,266 @@
 import os
-import threading
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
-
+import hashlib
+import feedparser
 import requests
+from datetime import datetime, timezone, timedelta
+from openai import OpenAI
+
+# =========================
+# تنظیمات
+# =========================
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+BALE_BOT_TOKEN = os.getenv("BALE_BOT_TOKEN")
+BALE_CHAT_ID = os.getenv("BALE_CHAT_ID")
+
+# RSSهای فناوری
+RSS_FEEDS = [
+    "https://techcrunch.com/feed/",
+    "https://www.theverge.com/rss/index.xml",
+    "https://www.wired.com/feed/rss",
+]
+
+# هر چند دقیقه یک بار بررسی شود
+CHECK_INTERVAL = 10
+
+# حداقل فاصله بین دو پست
+POST_INTERVAL = 60 * 60
+
+# فایل ذخیره وضعیت
+STATE_FILE = "state.txt"
+
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 
-TOKEN = os.getenv("BALE_BOT_TOKEN", "").strip()
-CHANNEL = os.getenv("BALE_CHANNEL", "@Yertech").strip()
+# =========================
+# وضعیت آخرین پست
+# =========================
 
-TEST_MESSAGE = os.getenv(
-    "TEST_MESSAGE",
-    "🚀 سلام از Yertech AI!\n\n"
-    "اتصال ربات به کانال فناوری‌یار با موفقیت تست شد. 🤖"
-)
-
-PORT = int(os.getenv("PORT", "10000"))
-
-API_BASE = f"https://tapi.bale.ai/bot{TOKEN}"
-
-
-# -----------------------------------
-# دریافت اطلاعات آپدیت‌های بله
-# -----------------------------------
-
-def get_updates():
-
-    if not TOKEN:
-        print("ERROR: BALE_BOT_TOKEN is not set.")
-        return
-
-    url = f"{API_BASE}/getUpdates"
-
+def load_last_post_time():
     try:
-
-        response = requests.get(
-            url,
-            timeout=30
-        )
-
-        print("")
-        print("===================================")
-        print("GET UPDATES STATUS:", response.status_code)
-        print("GET UPDATES RESPONSE:")
-        print(response.text)
-        print("===================================")
-        print("")
-
-    except Exception as e:
-
-        print("getUpdates failed:", repr(e))
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            return float(f.read().strip())
+    except Exception:
+        return 0
 
 
-# -----------------------------------
-# ارسال پیام آزمایشی
-# -----------------------------------
+def save_last_post_time():
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        f.write(str(time.time()))
 
-def send_message():
 
-    if not TOKEN:
-        print("ERROR: BALE_BOT_TOKEN is not set.")
-        return
+# =========================
+# دریافت RSS
+# =========================
 
-    url = f"{API_BASE}/sendMessage"
+def get_news():
+    news = []
 
-    payload = {
-        "chat_id": CHANNEL,
-        "text": TEST_MESSAGE
-    }
-
-    try:
-
-        response = requests.post(
-            url,
-            json=payload,
-            timeout=30
-        )
-
-        print("")
-        print("BALE API STATUS:", response.status_code)
-        print("BALE API RESPONSE:")
-        print(response.text)
-        print("")
-
-        if response.status_code != 200:
-            print("WARNING: Bale API returned an error.")
-            return
-
+    for rss_url in RSS_FEEDS:
         try:
+            feed = feedparser.parse(rss_url)
 
-            data = response.json()
+            for entry in feed.entries[:10]:
+                title = entry.get("title", "").strip()
+                link = entry.get("link", "").strip()
+                summary = entry.get("summary", "").strip()
 
-            if data.get("ok", False):
-
-                print(
-                    "SUCCESS: Test message sent to",
-                    CHANNEL
-                )
-
-            else:
-
-                print(
-                    "WARNING: Bale API did not return ok=true."
-                )
-
-                print(data)
+                if title and link:
+                    news.append({
+                        "title": title,
+                        "link": link,
+                        "summary": summary
+                    })
 
         except Exception as e:
+            print(f"RSS Error: {e}")
 
-            print(
-                "Could not parse Bale response:",
-                repr(e)
-            )
-
-    except Exception as e:
-
-        print(
-            "Bale API request failed:",
-            repr(e)
-        )
+    return news
 
 
-# -----------------------------------
-# سرور HTTP برای Render
-# -----------------------------------
+# =========================
+# جلوگیری از تکرار خبر
+# =========================
 
-class HealthHandler(BaseHTTPRequestHandler):
+def get_news_id(news):
+    raw = news["link"] or news["title"]
+    return hashlib.md5(raw.encode("utf-8")).hexdigest()
 
-    def do_GET(self):
 
-        if self.path in ("/", "/health"):
+def is_used(news_id):
+    try:
+        with open("used_news.txt", "r", encoding="utf-8") as f:
+            return news_id in f.read().splitlines()
+    except FileNotFoundError:
+        return False
 
-            body = b"Yertech AI is running."
 
-            self.send_response(200)
+def mark_used(news_id):
+    with open("used_news.txt", "a", encoding="utf-8") as f:
+        f.write(news_id + "\n")
 
-            self.send_header(
-                "Content-Type",
-                "text/plain; charset=utf-8"
-            )
 
-            self.send_header(
-                "Content-Length",
-                str(len(body))
-            )
+# =========================
+# انتخاب خبر
+# =========================
 
-            self.end_headers()
+def choose_news(news_list):
+    for news in news_list:
+        news_id = get_news_id(news)
 
-            self.wfile.write(body)
+        if not is_used(news_id):
+            return news
 
-        else:
+    return None
 
-            self.send_response(404)
 
-            self.end_headers()
+# =========================
+# بازنویسی با OpenAI
+# =========================
 
-    def log_message(self, format, *args):
+def rewrite_news(news):
+    prompt = f"""
+تو سردبیر کانال فناوری فارسی «فناوری‌یار» هستی.
 
+خبر زیر را به یک پست فارسی جذاب، کوتاه و حرفه‌ای برای کانال بله تبدیل کن.
+
+قوانین:
+- ترجمه تحت‌اللفظی نکن.
+- متن را روان و طبیعی بنویس.
+- اطلاعات اصلی خبر حفظ شود.
+- چیزی که در خبر وجود ندارد اضافه نکن.
+- از لحن خبری و صمیمی استفاده کن.
+- تیتر جذاب و کوتاه باشد.
+- متن حدود 100 تا 180 کلمه باشد.
+- در پایان 4 تا 6 هشتگ مرتبط قرار بده.
+- لینک منبع را در انتهای پست قرار بده.
+- از ایموجی به اندازه استفاده کن.
+- نام «فناوری‌یار» در متن نیاید مگر در امضای پایانی.
+
+عنوان خبر:
+{news["title"]}
+
+خلاصه خبر:
+{news["summary"]}
+
+لینک:
+{news["link"]}
+"""
+
+    response = client.responses.create(
+        model="gpt-5-mini",
+        input=prompt
+    )
+
+    return response.output_text.strip()
+
+
+# =========================
+# ارسال به بله
+# =========================
+
+def send_to_bale(message):
+    url = f"https://tapi.bale.ai/bot{BALE_BOT_TOKEN}/sendMessage"
+
+    data = {
+        "chat_id": BALE_CHAT_ID,
+        "text": message
+    }
+
+    response = requests.post(
+        url,
+        data=data,
+        timeout=30
+    )
+
+    print("Bale response:", response.text)
+
+    if response.ok:
+        try:
+            result = response.json()
+
+            if result.get("ok"):
+                return True
+
+        except Exception:
+            pass
+
+    return False
+
+
+# =========================
+# اجرای اصلی
+# =========================
+
+def process_news():
+
+    last_post = load_last_post_time()
+
+    # هنوز یک ساعت نشده
+    if time.time() - last_post < POST_INTERVAL:
+        print("هنوز یک ساعت از پست قبلی نگذشته است.")
         return
 
+    print("در حال دریافت اخبار...")
 
-# -----------------------------------
-# شروع سرور
-# -----------------------------------
+    news_list = get_news()
 
-def start_http_server():
+    if not news_list:
+        print("هیچ خبری پیدا نشد.")
+        return
 
-    server = HTTPServer(
-        ("0.0.0.0", PORT),
-        HealthHandler
-    )
+    news = choose_news(news_list)
 
-    print(
-        f"HTTP server running on 0.0.0.0:{PORT}"
-    )
+    if not news:
+        print("خبر جدیدی پیدا نشد.")
+        return
 
-    server.serve_forever()
+    print("خبر انتخاب شد:")
+    print(news["title"])
 
+    try:
+        print("در حال بازنویسی با OpenAI...")
 
-# -----------------------------------
-# برنامه اصلی
-# -----------------------------------
+        final_text = rewrite_news(news)
 
-def main():
+        print("متن تولید شده:")
+        print(final_text)
 
-    if not TOKEN:
+        print("در حال ارسال به بله...")
 
-        print(
-            "WARNING: BALE_BOT_TOKEN is not set."
-        )
+        success = send_to_bale(final_text)
 
-    # ابتدا سرور Render را اجرا می‌کنیم
+        if success:
+            news_id = get_news_id(news)
+            mark_used(news_id)
+            save_last_post_time()
 
-    server_thread = threading.Thread(
-        target=start_http_server,
-        daemon=True
-    )
+            print("✅ پست با موفقیت منتشر شد.")
 
-    server_thread.start()
+        else:
+            print("❌ ارسال به بله ناموفق بود.")
 
-    # کمی زمان برای بالا آمدن سرور
-
-    time.sleep(2)
-
-    print("")
-    print("===================================")
-    print("Yertech AI started.")
-    print("===================================")
-    print("")
-
-    # --------------------------------
-    # دریافت Updates
-    # --------------------------------
-
-    print("Checking Bale updates...")
-
-    get_updates()
-
-    # --------------------------------
-    # ارسال پیام آزمایشی
-    # --------------------------------
-
-    send_thread = threading.Thread(
-        target=send_message,
-        daemon=True
-    )
-
-    send_thread.start()
-
-    # --------------------------------
-    # زنده نگه داشتن برنامه
-    # --------------------------------
-
-    while True:
-
-        time.sleep(60)
+    except Exception as e:
+        print("ERROR:", e)
 
 
-# -----------------------------------
-# اجرای برنامه
-# -----------------------------------
+# =========================
+# Loop
+# =========================
 
 if __name__ == "__main__":
 
-    main()
+    print("🚀 فناوری‌یار شروع شد.")
+
+    while True:
+
+        try:
+            process_news()
+
+        except Exception as e:
+            print("MAIN ERROR:", e)
+
+        print(f"بررسی بعدی {CHECK_INTERVAL} دقیقه دیگر...")
+
+        time.sleep(CHECK_INTERVAL * 60)
