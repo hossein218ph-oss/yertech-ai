@@ -12,8 +12,12 @@ from openai import OpenAI
 
 
 # =========================================================
-# CONFIG
+# YERTECH AI - FINAL VERSION
 # =========================================================
+
+# ---------------------------------------------------------
+# Environment
+# ---------------------------------------------------------
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 BALE_BOT_TOKEN = os.getenv("BALE_BOT_TOKEN")
@@ -21,16 +25,23 @@ BALE_CHAT_ID = os.getenv("BALE_CHAT_ID")
 
 CHANNEL_USERNAME = "@yartech"
 
+# هر چند دقیقه منابع بررسی شوند
 CHECK_INTERVAL = 10 * 60
+
+# فاصله انتشار
 POST_INTERVAL = 60 * 60
 
+# تعداد کاندیداهایی که به AI داده می‌شود
 AI_CANDIDATES = 7
 
+# فایل‌های وضعیت
 USED_FILE = "used_news.txt"
 HISTORY_FILE = "news_history.json"
 
+# Render
 PORT = int(os.getenv("PORT", 10000))
 
+# Groq
 AI_MODEL = "openai/gpt-oss-120b"
 
 
@@ -46,7 +57,7 @@ RSS_FEEDS = [
 
 
 # =========================================================
-# GROQ
+# AI CLIENT
 # =========================================================
 
 client = OpenAI(
@@ -56,7 +67,7 @@ client = OpenAI(
 
 
 # =========================================================
-# RENDER HEALTH SERVER
+# HEALTH SERVER FOR RENDER
 # =========================================================
 
 class HealthHandler(BaseHTTPRequestHandler):
@@ -95,6 +106,39 @@ def start_http_server():
 
 
 # =========================================================
+# BASIC VALIDATION
+# =========================================================
+
+def validate_environment():
+
+    missing = []
+
+    if not GROQ_API_KEY:
+        missing.append("GROQ_API_KEY")
+
+    if not BALE_BOT_TOKEN:
+        missing.append("BALE_BOT_TOKEN")
+
+    if not BALE_CHAT_ID:
+        missing.append("BALE_CHAT_ID")
+
+    if missing:
+
+        print(
+            "❌ متغیرهای محیطی ناقص هستند:"
+        )
+
+        for item in missing:
+            print(
+                f"   - {item}"
+            )
+
+        return False
+
+    return True
+
+
+# =========================================================
 # USED NEWS
 # =========================================================
 
@@ -111,13 +155,19 @@ def load_used_news():
             encoding="utf-8"
         ) as f:
 
-            return set(
+            return {
                 line.strip()
                 for line in f
                 if line.strip()
-            )
+            }
 
-    except Exception:
+    except Exception as e:
+
+        print(
+            "⚠️ خطا در خواندن used_news:",
+            e
+        )
+
         return set()
 
 
@@ -168,7 +218,7 @@ def load_history():
     except Exception as e:
 
         print(
-            "⚠️ خطا در خواندن تاریخچه:",
+            "⚠️ خطا در خواندن history:",
             e
         )
 
@@ -179,7 +229,8 @@ def save_history(history):
 
     try:
 
-        history = history[-150:]
+        # حداکثر 200 خبر آخر
+        history = history[-200:]
 
         with open(
             HISTORY_FILE,
@@ -197,7 +248,7 @@ def save_history(history):
     except Exception as e:
 
         print(
-            "⚠️ خطا در ذخیره تاریخچه:",
+            "⚠️ خطا در ذخیره history:",
             e
         )
 
@@ -230,6 +281,11 @@ def add_to_history(news):
 
         "topic": news.get(
             "topic",
+            ""
+        ),
+
+        "source": news.get(
+            "source",
             ""
         ),
 
@@ -311,7 +367,10 @@ def get_words(text):
         "its",
         "new",
         "how",
-        "what"
+        "what",
+        "why",
+        "after",
+        "before"
     }
 
     return {
@@ -323,7 +382,7 @@ def get_words(text):
 
 
 # =========================================================
-# SIMILARITY
+# SIMILARITY ENGINE
 # =========================================================
 
 def similarity_score(
@@ -392,25 +451,11 @@ def duplicate_score(news):
 
         score = similarity_score(
 
-            news.get(
-                "title",
-                ""
-            ),
+            news.get("title", ""),
+            news.get("summary", ""),
 
-            news.get(
-                "summary",
-                ""
-            ),
-
-            old.get(
-                "title",
-                ""
-            ),
-
-            old.get(
-                "summary",
-                ""
-            )
+            old.get("title", ""),
+            old.get("summary", "")
         )
 
         if score > highest:
@@ -420,7 +465,7 @@ def duplicate_score(news):
 
 
 # =========================================================
-# TOPIC DETECTION
+# TOPIC ENGINE
 # =========================================================
 
 TOPICS = {
@@ -435,7 +480,8 @@ TOPICS = {
         "copilot",
         "machine learning",
         "robot",
-        "robotics"
+        "robotics",
+        "generative ai"
     ],
 
     "Mobile": [
@@ -445,17 +491,20 @@ TOPICS = {
         "pixel",
         "smartphone",
         "mobile",
-        "ios"
+        "ios",
+        "galaxy"
     ],
 
     "Gaming": [
         "playstation",
         "ps5",
+        "ps6",
         "xbox",
         "gaming",
         "game",
         "steam",
-        "nintendo"
+        "nintendo",
+        "console"
     ],
 
     "Security": [
@@ -464,7 +513,9 @@ TOPICS = {
         "cyberattack",
         "security",
         "privacy",
-        "malware"
+        "malware",
+        "ransomware",
+        "password"
     ],
 
     "Social": [
@@ -473,464 +524,10 @@ TOPICS = {
         "instagram",
         "youtube",
         "facebook",
-        "tiktok"
+        "tiktok",
+        "social media"
     ],
 
     "Cars": [
         "tesla",
-        "electric car",
-        "self driving",
-        "self-driving",
-        "autonomous"
-    ],
-
-    "Hardware": [
-        "nvidia",
-        "gpu",
-        "chip",
-        "processor",
-        "macbook",
-        "laptop"
-    ]
-}
-
-
-def detect_topic(
-    title,
-    summary
-):
-
-    text = normalize_text(
-        f"{title} {summary}"
-    )
-
-    best_topic = "Technology"
-    best_count = 0
-
-    for topic, keywords in TOPICS.items():
-
-        count = 0
-
-        for keyword in keywords:
-
-            if keyword in text:
-                count += 1
-
-        if count > best_count:
-
-            best_count = count
-            best_topic = topic
-
-    return best_topic
-
-
-# =========================================================
-# TOPIC DIVERSITY
-# =========================================================
-
-def topic_penalty(topic):
-
-    history = load_history()
-
-    if not history:
-        return 0
-
-    recent = history[-5:]
-
-    same_topic_count = 0
-
-    for item in recent:
-
-        if item.get(
-            "topic"
-        ) == topic:
-
-            same_topic_count += 1
-
-    if same_topic_count >= 3:
-        return 12
-
-    if same_topic_count == 2:
-        return 6
-
-    if same_topic_count == 1:
-        return 2
-
-    return 0
-
-
-# =========================================================
-# FRESHNESS
-# =========================================================
-
-def freshness_score(news):
-
-    published_time = news.get(
-        "published_time"
-    )
-
-    if not published_time:
-        return 0
-
-    try:
-
-        age_hours = (
-            time.time() -
-            published_time
-        ) / 3600
-
-        if age_hours < 2:
-            return 15
-
-        if age_hours < 6:
-            return 11
-
-        if age_hours < 12:
-            return 8
-
-        if age_hours < 24:
-            return 4
-
-        if age_hours < 48:
-            return 0
-
-        if age_hours < 72:
-            return -5
-
-        return -12
-
-    except Exception:
-
-        return 0
-
-
-# =========================================================
-# VIRAL SCORE
-# =========================================================
-
-def calculate_viral_score(
-    title,
-    summary
-):
-
-    text = normalize_text(
-        f"{title} {summary}"
-    )
-
-    score = 0
-
-    high_priority = [
-
-        "chatgpt",
-        "openai",
-        "iphone",
-        "ios",
-        "android",
-        "samsung",
-        "google",
-        "playstation",
-        "ps5",
-        "xbox",
-        "gaming",
-        "game",
-        "telegram",
-        "whatsapp",
-        "instagram",
-        "youtube",
-        "nvidia",
-        "tesla",
-        "robot",
-        "robotics",
-        "ai"
-    ]
-
-    for keyword in high_priority:
-
-        if keyword in text:
-            score += 6
-
-    secondary = [
-
-        "smartphone",
-        "phone",
-        "pixel",
-        "macbook",
-        "laptop",
-        "windows",
-        "macos",
-        "microsoft",
-        "meta",
-        "amazon",
-        "browser",
-        "internet",
-        "privacy",
-        "security",
-        "hack",
-        "hacked",
-        "cyberattack",
-        "electric car",
-        "self-driving",
-        "autonomous",
-        "chip",
-        "gpu",
-        "processor"
-    ]
-
-    for keyword in secondary:
-
-        if keyword in text:
-            score += 3
-
-    viral_words = [
-
-        "new",
-        "just announced",
-        "announced",
-        "launches",
-        "launched",
-        "reveals",
-        "revealed",
-        "first",
-        "major",
-        "breakthrough",
-        "surprising",
-        "unexpected",
-        "secret",
-        "free",
-        "faster",
-        "powerful",
-        "finally",
-        "now available",
-        "update",
-        "new feature",
-        "breaking"
-    ]
-
-    for keyword in viral_words:
-
-        if keyword in text:
-            score += 2
-
-    boring_words = [
-
-        "enterprise",
-        "venture capital",
-        "funding round",
-        "funding",
-        "corporate",
-        "developer tools",
-        "api pricing",
-        "acquisition",
-        "board of directors",
-        "quarterly earnings"
-    ]
-
-    for keyword in boring_words:
-
-        if keyword in text:
-            score -= 6
-
-    title_length = len(
-        title.split()
-    )
-
-    if 5 <= title_length <= 14:
-        score += 3
-
-    return score
-
-
-# =========================================================
-# NEWS COLLECTION
-# =========================================================
-
-def collect_news():
-
-    used_news = load_used_news()
-
-    candidates = []
-
-    print(
-        "\n🔎 بررسی منابع خبری..."
-    )
-
-    for feed_url in RSS_FEEDS:
-
-        try:
-
-            feed = feedparser.parse(
-                feed_url
-            )
-
-            for entry in feed.entries[:20]:
-
-                title = entry.get(
-                    "title",
-                    ""
-                ).strip()
-
-                summary = entry.get(
-                    "summary",
-                    ""
-                ).strip()
-
-                link = entry.get(
-                    "link",
-                    ""
-                ).strip()
-
-                if not title or not link:
-                    continue
-
-                news_id = hashlib.md5(
-                    link.encode(
-                        "utf-8"
-                    )
-                ).hexdigest()
-
-                if news_id in used_news:
-                    continue
-
-                published_time = None
-
-                if entry.get(
-                    "published_parsed"
-                ):
-
-                    try:
-
-                        published_time = time.mktime(
-                            entry.published_parsed
-                        )
-
-                    except Exception:
-                        pass
-
-                elif entry.get(
-                    "updated_parsed"
-                ):
-
-                    try:
-
-                        published_time = time.mktime(
-                            entry.updated_parsed
-                        )
-
-                    except Exception:
-                        pass
-
-                news = {
-
-                    "id": news_id,
-
-                    "title": title,
-
-                    "summary": summary,
-
-                    "link": link,
-
-                    "published_time":
-                        published_time,
-
-                    "topic":
-                        detect_topic(
-                            title,
-                            summary
-                        )
-                }
-
-                duplicate = duplicate_score(
-                    news
-                )
-
-                if duplicate >= 0.55:
-
-                    print(
-                        f"♻️ تکراری حذف شد: "
-                        f"{title}"
-                    )
-
-                    continue
-
-                viral = calculate_viral_score(
-                    title,
-                    summary
-                )
-
-                fresh = freshness_score(
-                    news
-                )
-
-                topic_pen = topic_penalty(
-                    news["topic"]
-                )
-
-                duplicate_pen = int(
-                    duplicate * 20
-                )
-
-                total = (
-                    viral
-                    +
-                    fresh
-                    -
-                    topic_pen
-                    -
-                    duplicate_pen
-                )
-
-                news["viral_score"] = viral
-                news["freshness_score"] = fresh
-                news["topic_penalty"] = topic_pen
-                news["duplicate_score"] = duplicate
-                news["total_score"] = total
-
-                candidates.append(
-                    news
-                )
-
-        except Exception as e:
-
-            print(
-                "⚠️ RSS Error:",
-                e
-            )
-
-    return candidates
-
-
-# =========================================================
-# REMOVE SAME-DAY / CURRENT BATCH DUPLICATES
-# =========================================================
-
-def remove_current_duplicates(
-    candidates
-):
-
-    candidates.sort(
-        key=lambda x:
-        x["total_score"],
-        reverse=True
-    )
-
-    selected = []
-
-    for news in candidates:
-
-        is_duplicate = False
-
-        for existing in selected:
-
-            similarity = similarity_score(
-
-                news["title"],
-                news["summary"],
-
-                existing["title"],
-                existing["summary"]
-            )
-
-            if similarity >= 0.50:
-
-                print(
-                    f"♻️ خبر مشابه حذف شد
+        "
