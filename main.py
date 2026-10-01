@@ -21,8 +21,8 @@ BALE_CHAT_ID = os.getenv("BALE_CHAT_ID")
 
 CHANNEL_USERNAME = "@yartech"
 
-CHECK_INTERVAL = 10 * 60
-POST_INTERVAL = 60 * 60
+CHECK_INTERVAL = 10 * 60       # بررسی RSS هر 10 دقیقه
+POST_INTERVAL = 60 * 60        # انتشار هر 1 ساعت
 
 AI_CANDIDATES = 7
 
@@ -32,6 +32,12 @@ HISTORY_FILE = "news_history.json"
 PORT = int(os.getenv("PORT", "10000"))
 
 AI_MODEL = "openai/gpt-oss-120b"
+
+# حداقل شباهت برای جلوگیری از انتشار خبر تکراری
+DUPLICATE_THRESHOLD = 0.48
+
+# شباهت شدید، حتی اگر موضوع کمی متفاوت نوشته شده باشد
+STRICT_DUPLICATE_THRESHOLD = 0.60
 
 
 # =========================================================
@@ -56,6 +62,13 @@ client = OpenAI(
 
 
 # =========================================================
+# GLOBAL PUBLISH LOCK
+# =========================================================
+
+publish_lock = threading.Lock()
+
+
+# =========================================================
 # RENDER HEALTH SERVER
 # =========================================================
 
@@ -68,6 +81,7 @@ class HealthHandler(BaseHTTPRequestHandler):
             "text/plain; charset=utf-8"
         )
         self.end_headers()
+
         self.wfile.write(
             b"Yertech AI is running."
         )
@@ -77,6 +91,7 @@ class HealthHandler(BaseHTTPRequestHandler):
 
 
 def start_http_server():
+
     server = HTTPServer(
         ("0.0.0.0", PORT),
         HealthHandler
@@ -107,7 +122,10 @@ def validate_environment():
         missing.append("BALE_CHAT_ID")
 
     if missing:
-        print("ERROR: Missing environment variables:")
+
+        print(
+            "ERROR: Missing environment variables:"
+        )
 
         for item in missing:
             print("-", item)
@@ -127,11 +145,13 @@ def load_used_news():
         return set()
 
     try:
+
         with open(
             USED_FILE,
             "r",
             encoding="utf-8"
         ) as f:
+
             return {
                 line.strip()
                 for line in f
@@ -139,26 +159,31 @@ def load_used_news():
             }
 
     except Exception as e:
+
         print(
             "Used news read error:",
             e
         )
+
         return set()
 
 
 def save_used_news(news_id):
 
     try:
+
         with open(
             USED_FILE,
             "a",
             encoding="utf-8"
         ) as f:
+
             f.write(
                 news_id + "\n"
             )
 
     except Exception as e:
+
         print(
             "Used news save error:",
             e
@@ -175,6 +200,7 @@ def load_history():
         return []
 
     try:
+
         with open(
             HISTORY_FILE,
             "r",
@@ -187,6 +213,7 @@ def load_history():
                 return data
 
     except Exception as e:
+
         print(
             "History read error:",
             e
@@ -199,10 +226,12 @@ def save_history(history):
 
     try:
 
-        history = history[-200:]
+        history = history[-300:]
+
+        temp_file = HISTORY_FILE + ".tmp"
 
         with open(
-            HISTORY_FILE,
+            temp_file,
             "w",
             encoding="utf-8"
         ) as f:
@@ -214,7 +243,13 @@ def save_history(history):
                 indent=2
             )
 
+        os.replace(
+            temp_file,
+            HISTORY_FILE
+        )
+
     except Exception as e:
+
         print(
             "History save error:",
             e
@@ -261,6 +296,11 @@ def normalize_text(text):
         text
     )
 
+    text = text.replace(
+        "&nbsp;",
+        " "
+    )
+
     text = re.sub(
         r"[^\w\s]",
         " ",
@@ -285,33 +325,16 @@ def get_words(text):
         return set()
 
     stopwords = {
-        "the",
-        "a",
-        "an",
-        "and",
-        "or",
-        "to",
-        "of",
-        "in",
-        "on",
-        "for",
-        "with",
-        "is",
-        "are",
-        "this",
-        "that",
-        "from",
-        "by",
-        "as",
-        "at",
-        "it",
-        "its",
-        "new",
-        "how",
-        "what",
-        "why",
-        "after",
-        "before"
+        "the", "a", "an", "and", "or",
+        "to", "of", "in", "on", "for",
+        "with", "is", "are", "this",
+        "that", "from", "by", "as",
+        "at", "it", "its", "new",
+        "how", "what", "why", "after",
+        "before", "will", "has", "have",
+        "was", "were", "into", "than",
+        "their", "they", "them", "about",
+        "more", "over", "under"
     }
 
     return {
@@ -326,6 +349,25 @@ def get_words(text):
 # SIMILARITY
 # =========================================================
 
+def jaccard_similarity(set_a, set_b):
+
+    if not set_a or not set_b:
+        return 0.0
+
+    intersection = len(
+        set_a & set_b
+    )
+
+    union = len(
+        set_a | set_b
+    )
+
+    if not union:
+        return 0.0
+
+    return intersection / union
+
+
 def similarity_score(
     title1,
     summary1,
@@ -339,65 +381,89 @@ def similarity_score(
     body1_words = get_words(summary1)
     body2_words = get_words(summary2)
 
-    if not title1_words or not title2_words:
-        return 0
-
-    title_intersection = len(
-        title1_words & title2_words
+    title_similarity = jaccard_similarity(
+        title1_words,
+        title2_words
     )
 
-    title_union = len(
-        title1_words | title2_words
+    body_similarity = jaccard_similarity(
+        body1_words,
+        body2_words
     )
 
-    title_similarity = (
-        title_intersection / title_union
-        if title_union
-        else 0
-    )
-
-    body_similarity = 0
-
-    if body1_words and body2_words:
-
-        body_intersection = len(
-            body1_words & body2_words
-        )
-
-        body_union = len(
-            body1_words | body2_words
-        )
-
-        if body_union:
-            body_similarity = (
-                body_intersection / body_union
-            )
-
+    # عنوان مهم‌تر از متن است
     return (
-        title_similarity * 0.75
-        + body_similarity * 0.25
+        title_similarity * 0.70
+        + body_similarity * 0.30
     )
 
 
-def duplicate_score(news):
+# =========================================================
+# KEY PHRASES
+# =========================================================
 
-    history = load_history()
+def important_words(text):
 
-    highest = 0
+    words = get_words(text)
 
-    for old in history:
+    important = set()
 
-        score = similarity_score(
-            news.get("title", ""),
-            news.get("summary", ""),
-            old.get("title", ""),
-            old.get("summary", "")
-        )
+    technology_terms = {
+        "apple",
+        "iphone",
+        "ios",
+        "android",
+        "google",
+        "samsung",
+        "openai",
+        "chatgpt",
+        "gemini",
+        "claude",
+        "microsoft",
+        "meta",
+        "nvidia",
+        "tesla",
+        "playstation",
+        "ps5",
+        "xbox",
+        "telegram",
+        "whatsapp",
+        "instagram",
+        "youtube",
+        "tiktok",
+        "robot",
+        "robotics",
+        "ai",
+        "artificial",
+        "intelligence",
+        "gaming",
+        "game"
+    }
 
-        if score > highest:
-            highest = score
+    for word in words:
 
-    return highest
+        if word in technology_terms:
+            important.add(word)
+
+    return important
+
+
+def semantic_topic_overlap(news1, news2):
+
+    words1 = important_words(
+        f"{news1.get('title', '')} "
+        f"{news1.get('summary', '')}"
+    )
+
+    words2 = important_words(
+        f"{news2.get('title', '')} "
+        f"{news2.get('summary', '')}"
+    )
+
+    return jaccard_similarity(
+        words1,
+        words2
+    )
 
 
 # =========================================================
@@ -505,6 +571,7 @@ def detect_topic(title, summary):
                 count += 1
 
         if count > best_count:
+
             best_count = count
             best_topic = topic
 
@@ -512,7 +579,7 @@ def detect_topic(title, summary):
 
 
 # =========================================================
-# TOPIC DIVERSITY
+# TOPIC PENALTY
 # =========================================================
 
 def topic_penalty(topic):
@@ -522,14 +589,13 @@ def topic_penalty(topic):
     if not history:
         return 0
 
-    recent = history[-6:]
+    recent = history[-8:]
 
-    same_topic_count = 0
-
-    for item in recent:
-
-        if item.get("topic") == topic:
-            same_topic_count += 1
+    same_topic_count = sum(
+        1
+        for item in recent
+        if item.get("topic") == topic
+    )
 
     if same_topic_count >= 4:
         return 15
@@ -589,6 +655,7 @@ def freshness_score(news):
         return -15
 
     except Exception:
+
         return 0
 
 
@@ -766,6 +833,81 @@ def source_score(source):
 
 
 # =========================================================
+# DUPLICATE AGAINST HISTORY
+# =========================================================
+
+def is_duplicate_against_history(news):
+
+    history = load_history()
+
+    for old in history:
+
+        similarity = similarity_score(
+            news.get("title", ""),
+            news.get("summary", ""),
+            old.get("title", ""),
+            old.get("summary", "")
+        )
+
+        topic_overlap = semantic_topic_overlap(
+            news,
+            old
+        )
+
+        same_topic = (
+            news.get("topic")
+            and news.get("topic")
+            == old.get("topic")
+        )
+
+        # شباهت معمولی
+        if similarity >= DUPLICATE_THRESHOLD:
+
+            print(
+                "HISTORY DUPLICATE:",
+                news.get("title")
+            )
+
+            print(
+                "Similarity:",
+                round(similarity, 3)
+            )
+
+            return True
+
+        # اگر موضوع و کلمات کلیدی اصلی یکی باشند
+        if (
+            same_topic
+            and topic_overlap >= 0.50
+            and similarity >= 0.35
+        ):
+
+            print(
+                "SEMANTIC DUPLICATE:",
+                news.get("title")
+            )
+
+            print(
+                "Topic overlap:",
+                round(topic_overlap, 3)
+            )
+
+            return True
+
+        # شباهت خیلی زیاد بدون توجه به موضوع
+        if similarity >= STRICT_DUPLICATE_THRESHOLD:
+
+            print(
+                "STRICT DUPLICATE:",
+                news.get("title")
+            )
+
+            return True
+
+    return False
+
+
+# =========================================================
 # COLLECT NEWS
 # =========================================================
 
@@ -825,10 +967,13 @@ def collect_news():
                 ):
 
                     try:
+
                         published_time = time.mktime(
                             entry.published_parsed
                         )
+
                     except Exception:
+
                         published_time = None
 
                 elif entry.get(
@@ -836,10 +981,13 @@ def collect_news():
                 ):
 
                     try:
+
                         published_time = time.mktime(
                             entry.updated_parsed
                         )
+
                     except Exception:
+
                         published_time = None
 
                 news = {
@@ -855,18 +1003,60 @@ def collect_news():
                     )
                 }
 
-                duplicate = duplicate_score(
+                # -----------------------------------------
+                # تاریخچه
+                # -----------------------------------------
+
+                if is_duplicate_against_history(
                     news
-                )
-
-                if duplicate >= 0.55:
-
-                    print(
-                        "Duplicate removed:",
-                        title
-                    )
+                ):
 
                     continue
+
+                # -----------------------------------------
+                # شباهت با خبرهای همین چرخه
+                # -----------------------------------------
+
+                current_duplicate = False
+
+                for existing in candidates:
+
+                    similarity = similarity_score(
+                        news["title"],
+                        news["summary"],
+                        existing["title"],
+                        existing["summary"]
+                    )
+
+                    topic_overlap = semantic_topic_overlap(
+                        news,
+                        existing
+                    )
+
+                    if (
+                        similarity >= 0.45
+                        or (
+                            news["topic"]
+                            == existing["topic"]
+                            and topic_overlap >= 0.50
+                            and similarity >= 0.30
+                        )
+                    ):
+
+                        print(
+                            "CURRENT BATCH DUPLICATE:",
+                            title
+                        )
+
+                        current_duplicate = True
+                        break
+
+                if current_duplicate:
+                    continue
+
+                # -----------------------------------------
+                # SCORE
+                # -----------------------------------------
 
                 viral = calculate_viral_score(
                     title,
@@ -881,10 +1071,6 @@ def collect_news():
                     news["topic"]
                 )
 
-                duplicate_pen = int(
-                    duplicate * 20
-                )
-
                 source_bonus = source_score(
                     source
                 )
@@ -894,13 +1080,11 @@ def collect_news():
                     + fresh
                     + source_bonus
                     - topic_pen
-                    - duplicate_pen
                 )
 
                 news["viral_score"] = viral
                 news["freshness_score"] = fresh
                 news["topic_penalty"] = topic_pen
-                news["duplicate_score"] = duplicate
                 news["source_score"] = source_bonus
                 news["total_score"] = total
 
@@ -946,17 +1130,28 @@ def remove_current_duplicates(
                 existing["summary"]
             )
 
-            if similarity >= 0.50:
+            topic_overlap = semantic_topic_overlap(
+                news,
+                existing
+            )
 
-                print(
-                    "Similar news removed:",
-                    news["title"]
-                )
+            if similarity >= 0.45:
+
+                duplicate = True
+                break
+
+            if (
+                news["topic"]
+                == existing["topic"]
+                and topic_overlap >= 0.50
+                and similarity >= 0.30
+            ):
 
                 duplicate = True
                 break
 
         if not duplicate:
+
             selected.append(
                 news
             )
@@ -1017,7 +1212,8 @@ def ai_select_best_news(
 
 خبرهای خشک مالی، سرمایه‌گذاری، سازمانی و مخصوص توسعه‌دهندگان را تا حد امکان انتخاب نکن.
 
-اگر خبری برای کاربر عادی جذاب‌تر و قابل فهم‌تر است، آن را ترجیح بده.
+اگر دو خبر درباره یک اتفاق یا محصول مشابه هستند،
+خبری را انتخاب کن که جذاب‌تر و تازه‌تر است.
 
 فقط شماره خبر را برگردان.
 هیچ توضیح دیگری ننویس.
@@ -1075,6 +1271,83 @@ def ai_select_best_news(
 
 
 # =========================================================
+# FINAL DUPLICATE CHECK
+# =========================================================
+
+def final_duplicate_check(news):
+
+    if not news:
+        return True
+
+    # دوباره تاریخچه را می‌خوانیم
+    # تا اگر بین انتخاب و انتشار چیزی ثبت شده،
+    # خبر تکراری منتشر نشود.
+
+    if is_duplicate_against_history(
+        news
+    ):
+
+        print(
+            "FINAL CHECK FAILED: duplicate."
+        )
+
+        return False
+
+    # بررسی با آخرین خبرهای منتشرشده
+    history = load_history()
+
+    recent = history[-10:]
+
+    for old in recent:
+
+        similarity = similarity_score(
+            news.get("title", ""),
+            news.get("summary", ""),
+            old.get("title", ""),
+            old.get("summary", "")
+        )
+
+        topic_overlap = semantic_topic_overlap(
+            news,
+            old
+        )
+
+        same_topic = (
+            news.get("topic")
+            == old.get("topic")
+        )
+
+        print(
+            "Final duplicate check:",
+            round(similarity, 3),
+            "topic_overlap:",
+            round(topic_overlap, 3)
+        )
+
+        if similarity >= 0.42:
+
+            print(
+                "FINAL DUPLICATE BLOCKED."
+            )
+
+            return False
+
+        if (
+            same_topic
+            and topic_overlap >= 0.50
+            and similarity >= 0.28
+        ):
+
+            print(
+                "FINAL SEMANTIC DUPLICATE BLOCKED."
+            )
+
+            return False
+
+    return True
+
+
+# =========================================================
 # GET BEST NEWS
 # =========================================================
 
@@ -1118,7 +1391,6 @@ def get_news():
             f"{news['topic']} | "
             f"viral={news['viral_score']} | "
             f"fresh={news['freshness_score']} | "
-            f"duplicate={news['duplicate_score']:.2f} | "
             f"total={news['total_score']}"
         )
 
@@ -1150,6 +1422,49 @@ def get_news():
             "Score:",
             selected["total_score"]
         )
+
+        # ---------------------------------------------
+        # مهم‌ترین مرحله ضدتکرار
+        # ---------------------------------------------
+
+        if not final_duplicate_check(
+            selected
+        ):
+
+            print(
+                "Selected article rejected "
+                "because it is too similar "
+                "to a previously published article."
+            )
+
+            # سراغ گزینه‌های بعدی می‌رویم
+            for alternative in candidates:
+
+                if (
+                    alternative["id"]
+                    == selected["id"]
+                ):
+                    continue
+
+                if final_duplicate_check(
+                    alternative
+                ):
+
+                    print(
+                        "Alternative selected:"
+                    )
+
+                    print(
+                        alternative["title"]
+                    )
+
+                    return alternative
+
+            print(
+                "No non-duplicate alternative found."
+            )
+
+            return None
 
     return selected
 
@@ -1195,7 +1510,8 @@ def rewrite_news(news):
 - لینک منبع در پایان
 - هیچ اطلاعاتی اختراع نکن
 - عبارت @yartech را اضافه نکن
-- از جمله‌های کلیشه‌ای مثل «در دنیای امروز فناوری» استفاده نکن
+- از جمله‌های کلیشه‌ای مثل
+  «در دنیای امروز فناوری» استفاده نکن
 - بیش از حد رسمی نباش
 
 مخاطب:
@@ -1225,10 +1541,15 @@ def rewrite_news(news):
             .strip()
         )
 
-        text += (
-            "\n\n📢 "
-            + CHANNEL_USERNAME
-        )
+        # اگر مدل اشتباهی @yartech اضافه کرد،
+        # دوباره اضافه نمی‌کنیم.
+
+        if CHANNEL_USERNAME not in text:
+
+            text += (
+                "\n\n📢 "
+                + CHANNEL_USERNAME
+            )
 
         return text
 
@@ -1303,72 +1624,111 @@ def send_to_bale(message):
 
 def run_cycle():
 
-    print("\n")
-    print("=" * 70)
-
-    print(
-        "STARTING NEWS CYCLE"
-    )
-
-    news = get_news()
-
-    if not news:
+    # فقط یک چرخه انتشار همزمان مجاز است
+    if not publish_lock.acquire(
+        blocking=False
+    ):
 
         print(
-            "Cycle finished without publishing."
+            "Publish cycle already running."
         )
 
         return False
 
-    message = rewrite_news(
-        news
-    )
+    try:
 
-    if not message:
+        print("\n")
+        print("=" * 70)
 
         print(
-            "News rewrite failed."
+            "STARTING NEWS CYCLE"
         )
 
-        return False
+        news = get_news()
 
-    print(
-        "\nGENERATED POST:"
-    )
+        if not news:
 
-    print(
-        message
-    )
+            print(
+                "Cycle finished without publishing."
+            )
 
-    success = send_to_bale(
-        message
-    )
+            return False
 
-    if success:
+        # یک بررسی نهایی درست قبل از تولید متن
+        if not final_duplicate_check(
+            news
+        ):
 
-        save_used_news(
-            news["id"]
-        )
+            print(
+                "News blocked by final duplicate check."
+            )
 
-        add_to_history(
+            return False
+
+        message = rewrite_news(
             news
         )
 
+        if not message:
+
+            print(
+                "News rewrite failed."
+            )
+
+            return False
+
         print(
-            "News history saved."
+            "\nGENERATED POST:"
         )
 
         print(
-            "NEWS CYCLE COMPLETED."
+            message
         )
 
-        return True
+        # بررسی دوباره درست قبل از ارسال
+        if not final_duplicate_check(
+            news
+        ):
 
-    print(
-        "Publish failed."
-    )
+            print(
+                "Publishing cancelled: duplicate detected."
+            )
 
-    return False
+            return False
+
+        success = send_to_bale(
+            message
+        )
+
+        if success:
+
+            save_used_news(
+                news["id"]
+            )
+
+            add_to_history(
+                news
+            )
+
+            print(
+                "News history saved."
+            )
+
+            print(
+                "NEWS CYCLE COMPLETED."
+            )
+
+            return True
+
+        print(
+            "Publish failed."
+        )
+
+        return False
+
+    finally:
+
+        publish_lock.release()
 
 
 # =========================================================
@@ -1389,6 +1749,14 @@ def main():
 
     print(
         "Anti-Duplicate: ACTIVE"
+    )
+
+    print(
+        "Semantic Duplicate: ACTIVE"
+    )
+
+    print(
+        "Final Publish Check: ACTIVE"
     )
 
     print(
@@ -1428,6 +1796,10 @@ def main():
         "Publish interval: 1 hour"
     )
 
+    print(
+        "RSS check interval: 10 minutes"
+    )
+
     print("=" * 70)
 
     if not validate_environment():
@@ -1438,6 +1810,7 @@ def main():
 
         return
 
+    # انتشار اولیه هنگام استارت
     run_cycle()
 
     last_post_time = time.time()
