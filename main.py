@@ -4,7 +4,6 @@ import hashlib
 import threading
 import json
 import re
-from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import feedparser
@@ -13,7 +12,7 @@ from openai import OpenAI
 
 
 # =========================================================
-# تنظیمات
+# CONFIG
 # =========================================================
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
@@ -25,16 +24,18 @@ CHANNEL_USERNAME = "@yartech"
 CHECK_INTERVAL = 10 * 60
 POST_INTERVAL = 60 * 60
 
-AI_CANDIDATES = 5
+AI_CANDIDATES = 7
 
 USED_FILE = "used_news.txt"
 HISTORY_FILE = "news_history.json"
 
 PORT = int(os.getenv("PORT", 10000))
 
+AI_MODEL = "openai/gpt-oss-120b"
+
 
 # =========================================================
-# RSS
+# RSS SOURCES
 # =========================================================
 
 RSS_FEEDS = [
@@ -45,7 +46,7 @@ RSS_FEEDS = [
 
 
 # =========================================================
-# Groq
+# GROQ
 # =========================================================
 
 client = OpenAI(
@@ -53,18 +54,22 @@ client = OpenAI(
     base_url="https://api.groq.com/openai/v1"
 )
 
-AI_MODEL = "openai/gpt-oss-120b"
-
 
 # =========================================================
-# Render HTTP Server
+# RENDER HEALTH SERVER
 # =========================================================
 
 class HealthHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
+
         self.send_response(200)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
+
+        self.send_header(
+            "Content-Type",
+            "text/plain; charset=utf-8"
+        )
+
         self.end_headers()
 
         self.wfile.write(
@@ -76,42 +81,70 @@ class HealthHandler(BaseHTTPRequestHandler):
 
 
 def start_http_server():
-    server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
 
-    print(f"🌐 Render HTTP server فعال شد روی پورت {PORT}")
+    server = HTTPServer(
+        ("0.0.0.0", PORT),
+        HealthHandler
+    )
+
+    print(
+        f"🌐 Render HTTP server فعال شد روی پورت {PORT}"
+    )
 
     server.serve_forever()
 
 
 # =========================================================
-# فایل‌های وضعیت
+# USED NEWS
 # =========================================================
 
 def load_used_news():
+
     if not os.path.exists(USED_FILE):
         return set()
 
     try:
-        with open(USED_FILE, "r", encoding="utf-8") as f:
+
+        with open(
+            USED_FILE,
+            "r",
+            encoding="utf-8"
+        ) as f:
+
             return set(
                 line.strip()
                 for line in f
                 if line.strip()
             )
+
     except Exception:
         return set()
 
 
 def save_used_news(news_id):
+
     try:
-        with open(USED_FILE, "a", encoding="utf-8") as f:
-            f.write(news_id + "\n")
+
+        with open(
+            USED_FILE,
+            "a",
+            encoding="utf-8"
+        ) as f:
+
+            f.write(
+                news_id + "\n"
+            )
+
     except Exception as e:
-        print("⚠️ خطا در ذخیره used_news:", e)
+
+        print(
+            "⚠️ خطا در ذخیره used_news:",
+            e
+        )
 
 
 # =========================================================
-# تاریخچه خبرهای منتشرشده
+# HISTORY
 # =========================================================
 
 def load_history():
@@ -120,14 +153,24 @@ def load_history():
         return []
 
     try:
-        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+
+        with open(
+            HISTORY_FILE,
+            "r",
+            encoding="utf-8"
+        ) as f:
+
             data = json.load(f)
 
             if isinstance(data, list):
                 return data
 
     except Exception as e:
-        print("⚠️ خطا در خواندن تاریخچه:", e)
+
+        print(
+            "⚠️ خطا در خواندن تاریخچه:",
+            e
+        )
 
     return []
 
@@ -135,10 +178,15 @@ def load_history():
 def save_history(history):
 
     try:
-        # فقط 100 خبر آخر نگهداری شود
-        history = history[-100:]
 
-        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+        history = history[-150:]
+
+        with open(
+            HISTORY_FILE,
+            "w",
+            encoding="utf-8"
+        ) as f:
+
             json.dump(
                 history,
                 f,
@@ -147,29 +195,53 @@ def save_history(history):
             )
 
     except Exception as e:
-        print("⚠️ خطا در ذخیره تاریخچه:", e)
+
+        print(
+            "⚠️ خطا در ذخیره تاریخچه:",
+            e
+        )
 
 
 def add_to_history(news):
 
     history = load_history()
 
-    item = {
-        "id": news.get("id", ""),
-        "title": news.get("title", ""),
-        "summary": news.get("summary", ""),
-        "link": news.get("link", ""),
-        "published": news.get("published", ""),
-        "timestamp": time.time()
-    }
+    history.append({
 
-    history.append(item)
+        "id": news.get(
+            "id",
+            ""
+        ),
+
+        "title": news.get(
+            "title",
+            ""
+        ),
+
+        "summary": news.get(
+            "summary",
+            ""
+        ),
+
+        "link": news.get(
+            "link",
+            ""
+        ),
+
+        "topic": news.get(
+            "topic",
+            ""
+        ),
+
+        "timestamp": time.time()
+
+    })
 
     save_history(history)
 
 
 # =========================================================
-# نرمال‌سازی متن
+# TEXT NORMALIZATION
 # =========================================================
 
 def normalize_text(text):
@@ -179,19 +251,32 @@ def normalize_text(text):
 
     text = text.lower()
 
-    # حذف URL
-    text = re.sub(r"https?://\S+", " ", text)
+    text = re.sub(
+        r"https?://\S+",
+        " ",
+        text
+    )
 
-    # حذف HTML
-    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(
+        r"<[^>]+>",
+        " ",
+        text
+    )
 
-    # حذف علائم
-    text = re.sub(r"[^\w\s]", " ", text, flags=re.UNICODE)
+    text = re.sub(
+        r"[^\w\s]",
+        " ",
+        text,
+        flags=re.UNICODE
+    )
 
-    # فاصله‌های اضافی
-    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(
+        r"\s+",
+        " ",
+        text
+    )
 
-    return text
+    return text.strip()
 
 
 def get_words(text):
@@ -201,10 +286,8 @@ def get_words(text):
     if not text:
         return set()
 
-    words = text.split()
-
-    # کلمات بسیار عمومی انگلیسی
     stopwords = {
+
         "the",
         "a",
         "an",
@@ -226,37 +309,45 @@ def get_words(text):
         "at",
         "it",
         "its",
-        "new"
+        "new",
+        "how",
+        "what"
     }
 
     return {
         word
-        for word in words
-        if len(word) > 2 and word not in stopwords
+        for word in text.split()
+        if len(word) > 2
+        and word not in stopwords
     }
 
 
 # =========================================================
-# تشخیص شباهت دو خبر
+# SIMILARITY
 # =========================================================
 
-def similarity_score(title1, summary1, title2, summary2):
+def similarity_score(
+    title1,
+    summary1,
+    title2,
+    summary2
+):
 
-    title_words_1 = get_words(title1)
-    title_words_2 = get_words(title2)
+    title1_words = get_words(title1)
+    title2_words = get_words(title2)
 
-    body_words_1 = get_words(summary1)
-    body_words_2 = get_words(summary2)
+    body1_words = get_words(summary1)
+    body2_words = get_words(summary2)
 
-    if not title_words_1 or not title_words_2:
+    if not title1_words or not title2_words:
         return 0
 
     title_intersection = len(
-        title_words_1 & title_words_2
+        title1_words & title2_words
     )
 
     title_union = len(
-        title_words_1 | title_words_2
+        title1_words | title2_words
     )
 
     title_similarity = (
@@ -267,22 +358,23 @@ def similarity_score(title1, summary1, title2, summary2):
 
     body_similarity = 0
 
-    if body_words_1 and body_words_2:
+    if body1_words and body2_words:
 
         body_intersection = len(
-            body_words_1 & body_words_2
+            body1_words & body2_words
         )
 
         body_union = len(
-            body_words_1 | body_words_2
+            body1_words | body2_words
         )
 
         if body_union:
+
             body_similarity = (
-                body_intersection / body_union
+                body_intersection /
+                body_union
             )
 
-    # تیتر مهم‌تر از خلاصه است
     return (
         title_similarity * 0.75
         +
@@ -290,117 +382,132 @@ def similarity_score(title1, summary1, title2, summary2):
     )
 
 
-# =========================================================
-# بررسی تکراری بودن
-# =========================================================
-
 def duplicate_score(news):
 
     history = load_history()
 
-    if not history:
-        return 0
-
-    highest_similarity = 0
+    highest = 0
 
     for old in history:
 
         score = similarity_score(
-            news.get("title", ""),
-            news.get("summary", ""),
-            old.get("title", ""),
-            old.get("summary", "")
+
+            news.get(
+                "title",
+                ""
+            ),
+
+            news.get(
+                "summary",
+                ""
+            ),
+
+            old.get(
+                "title",
+                ""
+            ),
+
+            old.get(
+                "summary",
+                ""
+            )
         )
 
-        if score > highest_similarity:
-            highest_similarity = score
+        if score > highest:
+            highest = score
 
-    return highest_similarity
+    return highest
 
 
 # =========================================================
-# موضوع خبر
+# TOPIC DETECTION
 # =========================================================
 
-def detect_topic(title, summary):
+TOPICS = {
+
+    "AI": [
+        "ai",
+        "artificial intelligence",
+        "chatgpt",
+        "openai",
+        "gemini",
+        "claude",
+        "copilot",
+        "machine learning",
+        "robot",
+        "robotics"
+    ],
+
+    "Mobile": [
+        "iphone",
+        "android",
+        "samsung",
+        "pixel",
+        "smartphone",
+        "mobile",
+        "ios"
+    ],
+
+    "Gaming": [
+        "playstation",
+        "ps5",
+        "xbox",
+        "gaming",
+        "game",
+        "steam",
+        "nintendo"
+    ],
+
+    "Security": [
+        "hack",
+        "hacked",
+        "cyberattack",
+        "security",
+        "privacy",
+        "malware"
+    ],
+
+    "Social": [
+        "telegram",
+        "whatsapp",
+        "instagram",
+        "youtube",
+        "facebook",
+        "tiktok"
+    ],
+
+    "Cars": [
+        "tesla",
+        "electric car",
+        "self driving",
+        "self-driving",
+        "autonomous"
+    ],
+
+    "Hardware": [
+        "nvidia",
+        "gpu",
+        "chip",
+        "processor",
+        "macbook",
+        "laptop"
+    ]
+}
+
+
+def detect_topic(
+    title,
+    summary
+):
 
     text = normalize_text(
         f"{title} {summary}"
     )
 
-    topics = {
-
-        "AI": [
-            "ai",
-            "artificial intelligence",
-            "chatgpt",
-            "openai",
-            "gemini",
-            "claude",
-            "copilot",
-            "machine learning",
-            "robot"
-        ],
-
-        "Mobile": [
-            "iphone",
-            "android",
-            "samsung",
-            "pixel",
-            "smartphone",
-            "mobile",
-            "ios"
-        ],
-
-        "Gaming": [
-            "playstation",
-            "ps5",
-            "xbox",
-            "gaming",
-            "game",
-            "steam",
-            "nintendo"
-        ],
-
-        "Security": [
-            "hack",
-            "hacked",
-            "cyberattack",
-            "security",
-            "privacy",
-            "malware"
-        ],
-
-        "Social": [
-            "telegram",
-            "whatsapp",
-            "instagram",
-            "youtube",
-            "facebook",
-            "tiktok"
-        ],
-
-        "Cars": [
-            "tesla",
-            "electric car",
-            "self driving",
-            "autonomous"
-        ],
-
-        "Hardware": [
-            "nvidia",
-            "gpu",
-            "chip",
-            "processor",
-            "macbook",
-            "laptop"
-        ]
-    }
-
     best_topic = "Technology"
     best_count = 0
 
-    for topic, keywords in topics.items():
+    for topic, keywords in TOPICS.items():
 
         count = 0
 
@@ -410,6 +517,7 @@ def detect_topic(title, summary):
                 count += 1
 
         if count > best_count:
+
             best_count = count
             best_topic = topic
 
@@ -417,22 +525,412 @@ def detect_topic(title, summary):
 
 
 # =========================================================
-# امتیاز تازگی
+# TOPIC DIVERSITY
+# =========================================================
+
+def topic_penalty(topic):
+
+    history = load_history()
+
+    if not history:
+        return 0
+
+    recent = history[-5:]
+
+    same_topic_count = 0
+
+    for item in recent:
+
+        if item.get(
+            "topic"
+        ) == topic:
+
+            same_topic_count += 1
+
+    if same_topic_count >= 3:
+        return 12
+
+    if same_topic_count == 2:
+        return 6
+
+    if same_topic_count == 1:
+        return 2
+
+    return 0
+
+
+# =========================================================
+# FRESHNESS
 # =========================================================
 
 def freshness_score(news):
 
-    published_time = news.get("published_time")
+    published_time = news.get(
+        "published_time"
+    )
 
     if not published_time:
         return 0
 
     try:
 
-        now = time.time()
-
-        hours_old = (
-            now - published_time
+        age_hours = (
+            time.time() -
+            published_time
         ) / 3600
 
-        if
+        if age_hours < 2:
+            return 15
+
+        if age_hours < 6:
+            return 11
+
+        if age_hours < 12:
+            return 8
+
+        if age_hours < 24:
+            return 4
+
+        if age_hours < 48:
+            return 0
+
+        if age_hours < 72:
+            return -5
+
+        return -12
+
+    except Exception:
+
+        return 0
+
+
+# =========================================================
+# VIRAL SCORE
+# =========================================================
+
+def calculate_viral_score(
+    title,
+    summary
+):
+
+    text = normalize_text(
+        f"{title} {summary}"
+    )
+
+    score = 0
+
+    high_priority = [
+
+        "chatgpt",
+        "openai",
+        "iphone",
+        "ios",
+        "android",
+        "samsung",
+        "google",
+        "playstation",
+        "ps5",
+        "xbox",
+        "gaming",
+        "game",
+        "telegram",
+        "whatsapp",
+        "instagram",
+        "youtube",
+        "nvidia",
+        "tesla",
+        "robot",
+        "robotics",
+        "ai"
+    ]
+
+    for keyword in high_priority:
+
+        if keyword in text:
+            score += 6
+
+    secondary = [
+
+        "smartphone",
+        "phone",
+        "pixel",
+        "macbook",
+        "laptop",
+        "windows",
+        "macos",
+        "microsoft",
+        "meta",
+        "amazon",
+        "browser",
+        "internet",
+        "privacy",
+        "security",
+        "hack",
+        "hacked",
+        "cyberattack",
+        "electric car",
+        "self-driving",
+        "autonomous",
+        "chip",
+        "gpu",
+        "processor"
+    ]
+
+    for keyword in secondary:
+
+        if keyword in text:
+            score += 3
+
+    viral_words = [
+
+        "new",
+        "just announced",
+        "announced",
+        "launches",
+        "launched",
+        "reveals",
+        "revealed",
+        "first",
+        "major",
+        "breakthrough",
+        "surprising",
+        "unexpected",
+        "secret",
+        "free",
+        "faster",
+        "powerful",
+        "finally",
+        "now available",
+        "update",
+        "new feature",
+        "breaking"
+    ]
+
+    for keyword in viral_words:
+
+        if keyword in text:
+            score += 2
+
+    boring_words = [
+
+        "enterprise",
+        "venture capital",
+        "funding round",
+        "funding",
+        "corporate",
+        "developer tools",
+        "api pricing",
+        "acquisition",
+        "board of directors",
+        "quarterly earnings"
+    ]
+
+    for keyword in boring_words:
+
+        if keyword in text:
+            score -= 6
+
+    title_length = len(
+        title.split()
+    )
+
+    if 5 <= title_length <= 14:
+        score += 3
+
+    return score
+
+
+# =========================================================
+# NEWS COLLECTION
+# =========================================================
+
+def collect_news():
+
+    used_news = load_used_news()
+
+    candidates = []
+
+    print(
+        "\n🔎 بررسی منابع خبری..."
+    )
+
+    for feed_url in RSS_FEEDS:
+
+        try:
+
+            feed = feedparser.parse(
+                feed_url
+            )
+
+            for entry in feed.entries[:20]:
+
+                title = entry.get(
+                    "title",
+                    ""
+                ).strip()
+
+                summary = entry.get(
+                    "summary",
+                    ""
+                ).strip()
+
+                link = entry.get(
+                    "link",
+                    ""
+                ).strip()
+
+                if not title or not link:
+                    continue
+
+                news_id = hashlib.md5(
+                    link.encode(
+                        "utf-8"
+                    )
+                ).hexdigest()
+
+                if news_id in used_news:
+                    continue
+
+                published_time = None
+
+                if entry.get(
+                    "published_parsed"
+                ):
+
+                    try:
+
+                        published_time = time.mktime(
+                            entry.published_parsed
+                        )
+
+                    except Exception:
+                        pass
+
+                elif entry.get(
+                    "updated_parsed"
+                ):
+
+                    try:
+
+                        published_time = time.mktime(
+                            entry.updated_parsed
+                        )
+
+                    except Exception:
+                        pass
+
+                news = {
+
+                    "id": news_id,
+
+                    "title": title,
+
+                    "summary": summary,
+
+                    "link": link,
+
+                    "published_time":
+                        published_time,
+
+                    "topic":
+                        detect_topic(
+                            title,
+                            summary
+                        )
+                }
+
+                duplicate = duplicate_score(
+                    news
+                )
+
+                if duplicate >= 0.55:
+
+                    print(
+                        f"♻️ تکراری حذف شد: "
+                        f"{title}"
+                    )
+
+                    continue
+
+                viral = calculate_viral_score(
+                    title,
+                    summary
+                )
+
+                fresh = freshness_score(
+                    news
+                )
+
+                topic_pen = topic_penalty(
+                    news["topic"]
+                )
+
+                duplicate_pen = int(
+                    duplicate * 20
+                )
+
+                total = (
+                    viral
+                    +
+                    fresh
+                    -
+                    topic_pen
+                    -
+                    duplicate_pen
+                )
+
+                news["viral_score"] = viral
+                news["freshness_score"] = fresh
+                news["topic_penalty"] = topic_pen
+                news["duplicate_score"] = duplicate
+                news["total_score"] = total
+
+                candidates.append(
+                    news
+                )
+
+        except Exception as e:
+
+            print(
+                "⚠️ RSS Error:",
+                e
+            )
+
+    return candidates
+
+
+# =========================================================
+# REMOVE SAME-DAY / CURRENT BATCH DUPLICATES
+# =========================================================
+
+def remove_current_duplicates(
+    candidates
+):
+
+    candidates.sort(
+        key=lambda x:
+        x["total_score"],
+        reverse=True
+    )
+
+    selected = []
+
+    for news in candidates:
+
+        is_duplicate = False
+
+        for existing in selected:
+
+            similarity = similarity_score(
+
+                news["title"],
+                news["summary"],
+
+                existing["title"],
+                existing["summary"]
+            )
+
+            if similarity >= 0.50:
+
+                print(
+                    f"♻️ خبر مشابه حذف شد
