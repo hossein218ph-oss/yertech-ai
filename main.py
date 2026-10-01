@@ -2,6 +2,7 @@ import os
 import time
 import hashlib
 import threading
+import json
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import feedparser
@@ -37,6 +38,9 @@ RSS_FEEDS = [
 
 STATE_FILE = "state.txt"
 USED_NEWS_FILE = "used_news.txt"
+
+# تعداد خبرهایی که برای داوری نهایی AI ارسال می‌شوند
+AI_CANDIDATES = 5
 
 
 # ==============================
@@ -118,31 +122,16 @@ server_thread.start()
 def get_last_post_time():
 
     try:
-
-        with open(
-            STATE_FILE,
-            "r"
-        ) as f:
-
-            return float(
-                f.read().strip()
-            )
-
+        with open(STATE_FILE, "r") as f:
+            return float(f.read().strip())
     except:
-
         return 0
 
 
 def save_last_post_time():
 
-    with open(
-        STATE_FILE,
-        "w"
-    ) as f:
-
-        f.write(
-            str(time.time())
-        )
+    with open(STATE_FILE, "w") as f:
+        f.write(str(time.time()))
 
 
 # ==============================
@@ -178,9 +167,7 @@ def save_used_news(news_id):
         encoding="utf-8"
     ) as f:
 
-        f.write(
-            news_id + "\n"
-        )
+        f.write(news_id + "\n")
 
 
 # ==============================
@@ -197,10 +184,10 @@ def make_news_id(link, title):
 
 
 # ==============================
-# News Score
+# Local Viral Score
 # ==============================
 
-def calculate_score(title, summary):
+def calculate_viral_score(title, summary):
 
     text = (
         title + " " + summary
@@ -208,135 +195,163 @@ def calculate_score(title, summary):
 
     score = 0
 
-    # موضوعات بسیار جذاب برای مخاطب عمومی ایران
-    high_priority = [
+
+    # --------------------------------
+    # بسیار مهم برای مخاطب عمومی
+    # --------------------------------
+
+    very_high = [
         "chatgpt",
         "openai",
-        "artificial intelligence",
-        "ai",
         "iphone",
         "ios",
         "android",
         "samsung",
         "google",
-        "pixel",
-        "telegram",
-        "whatsapp",
-        "instagram",
-        "youtube",
         "playstation",
         "ps5",
         "xbox",
         "gaming",
         "game",
+        "telegram",
+        "whatsapp",
+        "instagram",
+        "youtube",
         "nvidia",
-        "amd",
-        "intel",
-        "laptop",
-        "smartphone",
-        "phone",
-        "cybersecurity",
-        "hack",
-        "hacked",
-        "privacy",
+        "tesla",
         "robot",
         "robotics",
-        "electric car",
-        "tesla",
-        "self driving",
-        "autonomous"
+        "artificial intelligence",
+        "ai"
     ]
 
-    for keyword in high_priority:
+    for keyword in very_high:
+
+        if keyword in text:
+            score += 8
+
+
+    # --------------------------------
+    # موضوعات جذاب
+    # --------------------------------
+
+    high = [
+        "smartphone",
+        "phone",
+        "pixel",
+        "macbook",
+        "laptop",
+        "windows",
+        "macos",
+        "microsoft",
+        "meta",
+        "amazon",
+        "browser",
+        "internet",
+        "privacy",
+        "security",
+        "hack",
+        "hacked",
+        "cyberattack",
+        "electric car",
+        "self-driving",
+        "autonomous",
+        "chip",
+        "gpu",
+        "processor"
+    ]
+
+    for keyword in high:
 
         if keyword in text:
             score += 5
 
 
-    # موضوعات جذاب ولی کمی تخصصی‌تر
-    medium_priority = [
-        "cloud",
-        "chip",
-        "processor",
-        "gpu",
-        "browser",
-        "windows",
-        "macos",
-        "apple",
-        "microsoft",
-        "meta",
-        "amazon",
-        "web",
-        "internet",
-        "software",
-        "hardware",
-        "startup"
-    ]
+    # --------------------------------
+    # نشانه‌های خبر وایرال
+    # --------------------------------
 
-    for keyword in medium_priority:
-
-        if keyword in text:
-            score += 3
-
-
-    # موضوعات کم‌جذاب برای مخاطب عمومی
-    low_priority = [
-        "enterprise",
-        "funding",
-        "venture capital",
-        "corporate",
-        "developer tools",
-        "api pricing",
-        "acquisition"
-    ]
-
-    for keyword in low_priority:
-
-        if keyword in text:
-            score -= 2
-
-
-    # اخبار دارای کلمات جذاب خبری
     viral_words = [
         "new",
-        "launch",
+        "just announced",
+        "announced",
+        "launches",
+        "launched",
         "reveals",
         "revealed",
-        "announces",
-        "announced",
-        "update",
+        "first",
         "major",
         "breakthrough",
+        "surprising",
+        "unexpected",
         "secret",
         "free",
         "faster",
         "powerful",
-        "first",
-        "future"
+        "finally",
+        "now",
+        "available",
+        "update",
+        "new feature"
     ]
 
     for keyword in viral_words:
 
         if keyword in text:
-            score += 2
+            score += 3
+
+
+    # --------------------------------
+    # موضوعاتی که معمولاً برای مخاطب
+    # عمومی جذابیت کمتری دارند
+    # --------------------------------
+
+    boring = [
+        "enterprise",
+        "venture capital",
+        "funding round",
+        "funding",
+        "corporate",
+        "developer tools",
+        "api pricing",
+        "acquisition",
+        "board of directors",
+        "quarterly earnings"
+    ]
+
+    for keyword in boring:
+
+        if keyword in text:
+            score -= 5
+
+
+    # --------------------------------
+    # امتیاز برای عنوان کوتاه و خبری
+    # --------------------------------
+
+    title_words = title.split()
+
+    if 5 <= len(title_words) <= 14:
+        score += 3
 
 
     return score
 
 
 # ==============================
-# Get News
+# Collect News
 # ==============================
 
-def get_news():
+def collect_news():
 
     print("===================================")
-    print("📰 در حال بررسی و رتبه‌بندی اخبار...")
+    print("📰 در حال جمع‌آوری اخبار...")
     print("===================================")
 
     used_news = get_used_news()
 
     all_news = []
+
 
     for feed_url in RSS_FEEDS:
 
@@ -349,6 +364,7 @@ def get_news():
             feed = feedparser.parse(
                 feed_url
             )
+
 
             for entry in feed.entries[:15]:
 
@@ -367,35 +383,216 @@ def get_news():
                     ""
                 ).strip()
 
+
                 if not title or not link:
                     continue
+
 
                 news_id = make_news_id(
                     link,
                     title
                 )
 
+
                 if news_id in used_news:
                     continue
 
-                score = calculate_score(
+
+                score = calculate_viral_score(
                     title,
                     summary
                 )
 
+
                 all_news.append({
+
                     "id": news_id,
+
                     "title": title,
+
                     "link": link,
+
                     "summary": summary,
+
                     "score": score
+
                 })
+
 
         except Exception as e:
 
             print(
                 f"❌ RSS Error: {e}"
             )
+
+
+    return all_news
+
+
+# ==============================
+# AI Viral Selection
+# ==============================
+
+def ai_select_best_news(candidates):
+
+    if not candidates:
+        return None
+
+
+    print("===================================")
+    print("🤖 در حال تحلیل وایرال بودن اخبار...")
+    print("===================================")
+
+
+    news_text = ""
+
+
+    for i, news in enumerate(
+        candidates,
+        start=1
+    ):
+
+        news_text += f"""
+
+خبر شماره {i}
+
+عنوان:
+{news["title"]}
+
+خلاصه:
+{news["summary"][:1200]}
+
+امتیاز اولیه:
+{news["score"]}
+
+"""
+
+
+    prompt = f"""
+تو سردبیر یک کانال فناوری فارسی با مخاطبان ایرانی هستی.
+
+باید از بین اخبار زیر فقط یک خبر را برای انتشار انتخاب کنی.
+
+هدف:
+انتخاب خبری که بیشترین احتمال را دارد کاربران عادی آن را
+بخوانند، برای دوستانشان بفرستند و درباره آن صحبت کنند.
+
+معیارهای انتخاب:
+
+1. جذابیت برای کاربر عادی ایرانی
+2. تازگی و اهمیت خبر
+3. کاربرد واقعی برای مردم
+4. عجیب یا جالب بودن
+5. مربوط بودن به AI، ChatGPT، موبایل، آیفون،
+سامسونگ، اندروید، بازی، PS5، Xbox، اینترنت،
+امنیت، خودروهای هوشمند و فناوری‌های روز
+6. قابلیت ایجاد کنجکاوی
+7. قابلیت وایرال شدن
+8. اعتبار و اهمیت موضوع
+
+اخبار خشک شرکتی، سرمایه‌گذاری، گزارش مالی،
+ابزارهای بسیار تخصصی برنامه‌نویسی و اخبار کم‌اهمیت
+را در اولویت پایین قرار بده.
+
+فقط و فقط شماره خبر انتخاب‌شده را در خروجی بنویس.
+
+مثلاً:
+
+3
+
+اخبار:
+
+{news_text}
+"""
+
+
+    try:
+
+        response = client.chat.completions.create(
+
+            model="openai/gpt-oss-120b",
+
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+
+            temperature=0.2,
+
+            max_tokens=50
+        )
+
+
+        result = (
+            response
+            .choices[0]
+            .message
+            .content
+            .strip()
+        )
+
+
+        digits = ""
+
+        for char in result:
+
+            if char.isdigit():
+                digits += char
+
+
+        if not digits:
+
+            print(
+                "⚠️ AI شماره خبر را مشخص نکرد."
+            )
+
+            return candidates[0]
+
+
+        index = int(digits) - 1
+
+
+        if (
+            index < 0
+            or index >= len(candidates)
+        ):
+
+            return candidates[0]
+
+
+        selected = candidates[index]
+
+
+        print("===================================")
+        print("🔥 AI خبر وایرال‌تر را انتخاب کرد:")
+        print(selected["title"])
+        print(
+            f"⭐ امتیاز اولیه: {selected['score']}"
+        )
+        print("===================================")
+
+
+        return selected
+
+
+    except Exception as e:
+
+        print(
+            f"❌ AI Selection Error: {e}"
+        )
+
+        return candidates[0]
+
+
+# ==============================
+# Get Best News
+# ==============================
+
+def get_news():
+
+    all_news = collect_news()
 
 
     if not all_news:
@@ -407,7 +604,7 @@ def get_news():
         return None
 
 
-    # مرتب‌سازی بر اساس جذابیت
+    # مرتب‌سازی اولیه
     all_news.sort(
         key=lambda x: x["score"],
         reverse=True
@@ -415,7 +612,8 @@ def get_news():
 
 
     print("===================================")
-    print("🏆 اخبار برتر:")
+    print("🏆 پنج خبر برتر اولیه:")
+
 
     for item in all_news[:5]:
 
@@ -424,340 +622,52 @@ def get_news():
             f"{item['title']}"
         )
 
-    print("===================================")
-
-
-    news = all_news[0]
-
-
-    print(
-        "🔥 خبر انتخاب شد:"
-    )
-
-    print(
-        news["title"]
-    )
-
-    print(
-        f"⭐ امتیاز جذابیت: {news['score']}"
-    )
 
     print("===================================")
 
 
-    return news
+    # فقط چند گزینه برتر برای AI
+    candidates = all_news[
+        :AI_CANDIDATES
+    ]
+
+
+    selected = ai_select_best_news(
+        candidates
+    )
+
+
+    return selected
 
 
 # ==============================
-# Rewrite News With Groq
+# Rewrite News
 # ==============================
 
 def rewrite_news(news):
 
     print(
-        "🤖 در حال تبدیل خبر به محتوای جذاب فارسی..."
+        "🤖 در حال تبدیل خبر به محتوای جذاب..."
     )
 
     print("===================================")
 
 
     prompt = f"""
-تو سردبیر حرفه‌ای یک کانال فناوری فارسی به نام «فناوری‌یار» هستی.
-
-مخاطبان کانال عمدتاً کاربران ایرانی عادی هستند، نه برنامه‌نویسان یا متخصصان فناوری.
-
-هدف این است که خبر خارجی زیر را به یک پست فارسی جذاب، قابل فهم و ارزشمند تبدیل کنی.
-
-قوانین بسیار مهم:
-
-1. متن را ترجمه کلمه‌به‌کلمه نکن.
-2. فارسی طبیعی و محاوره‌ای اما حرفه‌ای بنویس.
-3. تیتر باید جذاب و کنجکاوکننده باشد.
-4. در دو جمله اول یک قلاب جذاب ایجاد کن.
-5. اگر خبر درباره محصول یا قابلیت جدید است، خیلی واضح بگو چه چیزی تغییر کرده.
-6. توضیح بده این خبر چرا برای یک کاربر معمولی مهم است.
-7. اگر کاربرد واقعی برای کاربران دارد، آن را توضیح بده.
-8. اطلاعاتی که در خبر اصلی نیست اضافه نکن.
-9. از اغراق و تیتر دروغین استفاده نکن.
-10. متن حدود 120 تا 200 کلمه باشد.
-11. پاراگراف‌ها کوتاه باشند.
-12. از ایموجی‌های مناسب و محدود استفاده کن.
-13. در پایان 4 تا 6 هشتگ مرتبط فارسی قرار بده.
-14. لینک منبع را در پایان قرار بده.
-15. نام کانال یا @yartech را خودت اضافه نکن.
-16. درباره هوش مصنوعی یا نحوه تولید این متن صحبت نکن.
-17. متن باید مستقیماً قابل انتشار در بله باشد.
-18. اگر خبر به یک محصول معروف مربوط است، نام محصول را به شکل واضح در تیتر بیاور.
-19. اگر خبر قابلیت جالب یا عجیب دارد، روی همان قابلیت تمرکز کن.
-20. از عبارت‌های کلیشه‌ای مثل «دنیای فناوری روزبه‌روز در حال پیشرفت است» استفاده نکن.
-
-ساختار:
-
-🚀 [تیتر جذاب]
-
-[یک شروع کوتاه و کنجکاوکننده]
-
-[توضیح ساده و کاربردی خبر]
-
-[چرا این خبر مهم است یا چه کاربردی دارد؟]
-
-🔗 منبع:
-{news["link"]}
-
-#فناوری #تکنولوژی #هوش_مصنوعی
-
-عنوان اصلی خبر:
-{news["title"]}
-
-خلاصه خبر:
-{news["summary"]}
-"""
-
-
-    response = client.chat.completions.create(
-
-        model="openai/gpt-oss-120b",
-
-        messages=[
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ],
-
-        temperature=0.8,
-
-        max_tokens=900
-    )
-
-
-    rewritten = (
-        response
-        .choices[0]
-        .message
-        .content
-        .strip()
-    )
-
-
-    # آیدی کانال
-    rewritten += (
-        f"\n\n📢 {CHANNEL_USERNAME}"
-    )
-
-
-    print("===================================")
-    print(
-        "✅ خبر با سبک مخصوص مخاطب ایرانی آماده شد."
-    )
-    print(
-        "📢 آیدی کانال اضافه شد."
-    )
-    print("===================================")
-
-
-    return rewritten
-
-
-# ==============================
-# Send To Bale
-# ==============================
-
-def send_to_bale(message):
-
-    print(
-        "📤 در حال ارسال به بله..."
-    )
-
-    url = (
-        f"https://tapi.bale.ai/"
-        f"bot{BALE_BOT_TOKEN}/sendMessage"
-    )
-
-    payload = {
-        "chat_id": BALE_CHAT_ID,
-        "text": message
-    }
-
-
-    try:
-
-        response = requests.post(
-            url,
-            json=payload,
-            timeout=30
-        )
-
-
-        print(
-            "BALE STATUS:",
-            response.status_code
-        )
-
-
-        if response.status_code == 200:
-
-            data = response.json()
-
-
-            if data.get("ok") is True:
-
-                print("===================================")
-
-                print(
-                    "✅ پست با موفقیت در بله منتشر شد."
-                )
-
-                print("===================================")
-
-                return True
-
-
-        print(
-            "❌ ارسال به بله ناموفق بود."
-        )
-
-        print(
-            response.text
-        )
-
-        return False
-
-
-    except Exception as e:
-
-        print(
-            f"❌ Bale Error: {e}"
-        )
-
-        return False
-
-
-# ==============================
-# Start
-# ==============================
-
-print("===================================")
-print("🚀 فناوری‌یار شروع شد.")
-print("🤖 AI Engine: Groq")
-print("📰 Smart RSS Selection: Active")
-print("📢 Bale: Active")
-print("📢 Channel: @yartech")
-print("🌐 Render Port: Active")
-print("⏰ فاصله انتشار: 1 ساعت")
-print("===================================")
-
-
-# ==============================
-# Main Loop
-# ==============================
-
-while True:
-
-    try:
-
-        last_post = get_last_post_time()
-
-        current_time = time.time()
-
-
-        if (
-            current_time - last_post
-            < POST_INTERVAL
-        ):
-
-            remaining = int(
-                POST_INTERVAL
-                - (
-                    current_time
-                    - last_post
-                )
-            )
-
-            minutes = remaining // 60
-
-
-            print(
-                f"⏳ هنوز زمان انتشار نرسیده. "
-                f"حدود {minutes} دقیقه باقی مانده."
-            )
-
-
-            time.sleep(
-                CHECK_INTERVAL
-            )
-
-            continue
-
-
-        news = get_news()
-
-
-        if not news:
-
-            print(
-                "بررسی بعدی 10 دقیقه دیگر..."
-            )
-
-            time.sleep(
-                CHECK_INTERVAL
-            )
-
-            continue
-
-
-        rewritten = rewrite_news(
-            news
-        )
-
-
-        success = send_to_bale(
-            rewritten
-        )
-
-
-        if success:
-
-            save_used_news(
-                news["id"]
-            )
-
-            save_last_post_time()
-
-
-            print(
-                "🎉 چرخه انتشار با موفقیت انجام شد."
-            )
-
-        else:
-
-            print(
-                "⚠️ ارسال انجام نشد؛ "
-                "خبر به عنوان استفاده‌شده ثبت نشد."
-            )
-
-
-        print(
-            "بررسی بعدی 10 دقیقه دیگر..."
-        )
-
-
-        time.sleep(
-            CHECK_INTERVAL
-        )
-
-
-    except Exception as e:
-
-        print("===================================")
-        print("❌ ERROR:")
-        print(e)
-        print("===================================")
-
-        print(
-            "بررسی بعدی 10 دقیقه دیگر..."
-        )
-
-        time.sleep(
-            CHECK_INTERVAL
-        )
+تو سردبیر حرفه‌ای کانال فناوری فارسی «فناوری‌یار» هستی.
+
+مخاطبان کانال عمدتاً کاربران ایرانی عادی هستند.
+
+این خبر را به یک پست بسیار جذاب، طبیعی و قابل فهم فارسی تبدیل کن.
+
+قوانین:
+
+1. ترجمه کلمه‌به‌کلمه ممنوع.
+2. فارسی روان و طبیعی بنویس.
+3. تیتر باید کوتاه و بسیار جذاب باشد.
+4. دو جمله اول باید قلاب داشته باشند.
+5. توضیح بده دقیقاً چه اتفاقی افتاده.
+6. توضیح بده چرا این خبر برای کاربر معمولی مهم است.
+7. اگر قابلیت یا محصول جدید است، کاربردش را واضح توضیح بده.
+8. اطلاعات جعلی یا خارج از خبر اضافه نکن.
+9. اغراق در حد تی
