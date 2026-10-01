@@ -25,6 +25,8 @@ RSS_FEEDS = [
 STATE_FILE = "state.txt"
 USED_NEWS_FILE = "used_news.txt"
 
+CHANNEL_USERNAME = "@yartech"
+
 # =========================
 # بررسی تنظیمات
 # =========================
@@ -94,6 +96,7 @@ def save_used_news(news_id):
 
 def make_news_id(link, title):
     value = link + title
+
     return hashlib.md5(
         value.encode("utf-8")
     ).hexdigest()
@@ -110,15 +113,20 @@ def get_news():
     print("===================================")
 
     used_news = get_used_news()
+
     all_news = []
 
     for feed_url in RSS_FEEDS:
 
         try:
 
-            print(f"Checking RSS: {feed_url}")
+            print(
+                f"Checking RSS: {feed_url}"
+            )
 
-            feed = feedparser.parse(feed_url)
+            feed = feedparser.parse(
+                feed_url
+            )
 
             for entry in feed.entries[:10]:
 
@@ -169,6 +177,7 @@ def get_news():
 
         return None
 
+    # انتخاب اولین خبر جدید
     news = all_news[0]
 
     print("===================================")
@@ -185,11 +194,16 @@ def get_news():
 
 def rewrite_news(news):
 
-    print("در حال بازنویسی خبر با Groq...")
-    print("===================================")
+    print(
+        "در حال بازنویسی خبر با Groq..."
+    )
+
+    print(
+        "==================================="
+    )
 
     prompt = f"""
-تو نویسنده کانال فناوری فارسی «فناوری‌یار» هستی.
+تو نویسنده حرفه‌ای یک کانال فناوری فارسی هستی.
 
 خبر زیر را به یک پست جذاب و حرفه‌ای فارسی برای کانال بله تبدیل کن.
 
@@ -199,13 +213,13 @@ def rewrite_news(news):
 2. اصل خبر را تغییر نده.
 3. اطلاعاتی که در خبر وجود ندارد اضافه نکن.
 4. متن حدود 100 تا 180 کلمه باشد.
-5. شروع متن جذاب باشد.
+5. تیتر کوتاه، جذاب و خبری باشد.
 6. از ایموجی‌های مناسب استفاده کن.
 7. در پایان 4 تا 6 هشتگ مرتبط قرار بده.
 8. لینک منبع خبر را در پایان قرار بده.
-9. عبارت «فناوری‌یار» فقط در امضای پایانی استفاده شود.
-10. متن برای انتشار مستقیم در کانال آماده باشد.
-11. درباره نحوه تولید متن توضیح نده.
+9. متن آماده انتشار مستقیم در کانال باشد.
+10. درباره نحوه تولید متن یا هوش مصنوعی توضیح نده.
+11. نام کانال یا آیدی کانال را اضافه نکن. آیدی توسط سیستم اضافه خواهد شد.
 
 عنوان خبر:
 
@@ -229,8 +243,6 @@ def rewrite_news(news):
 {news["link"]}
 
 #فناوری #تکنولوژی #هوش_مصنوعی
-
-— فناوری‌یار
 """
 
     response = client.chat.completions.create(
@@ -247,9 +259,29 @@ def rewrite_news(news):
 
     rewritten = response.choices[0].message.content.strip()
 
-    print("===================================")
-    print("بازنویسی با موفقیت انجام شد.")
-    print("===================================")
+    # =========================
+    # اضافه کردن آیدی کانال
+    # =========================
+
+    rewritten += (
+        f"\n\n📢 {CHANNEL_USERNAME}"
+    )
+
+    print(
+        "==================================="
+    )
+
+    print(
+        "بازنویسی با موفقیت انجام شد."
+    )
+
+    print(
+        "آیدی کانال به انتهای پست اضافه شد."
+    )
+
+    print(
+        "==================================="
+    )
 
     return rewritten
 
@@ -260,7 +292,9 @@ def rewrite_news(news):
 
 def send_to_bale(message):
 
-    print("در حال ارسال به بله...")
+    print(
+        "در حال ارسال به بله..."
+    )
 
     url = (
         f"https://tapi.bale.ai/"
@@ -291,9 +325,17 @@ def send_to_bale(message):
 
             if data.get("ok") is True:
 
-                print("===================================")
-                print("پست با موفقیت در بله منتشر شد.")
-                print("===================================")
+                print(
+                    "==================================="
+                )
+
+                print(
+                    "پست با موفقیت در بله منتشر شد."
+                )
+
+                print(
+                    "==================================="
+                )
 
                 return True
 
@@ -301,7 +343,9 @@ def send_to_bale(message):
             "❌ ارسال به بله ناموفق بود."
         )
 
-        print(response.text)
+        print(
+            response.text
+        )
 
         return False
 
@@ -318,13 +362,37 @@ def send_to_bale(message):
 # شروع برنامه
 # =========================
 
-print("===================================")
-print("🚀 فناوری‌یار شروع شد.")
-print("🤖 AI Engine: Groq")
-print("📰 RSS: Active")
-print("📢 Bale: Active")
-print("⏰ فاصله انتشار: 1 ساعت")
-print("===================================")
+print(
+    "==================================="
+)
+
+print(
+    "🚀 فناوری‌یار شروع شد."
+)
+
+print(
+    "🤖 AI Engine: Groq"
+)
+
+print(
+    "📰 RSS: Active"
+)
+
+print(
+    "📢 Bale: Active"
+)
+
+print(
+    "📢 Channel: @yartech"
+)
+
+print(
+    "⏰ فاصله انتشار: 1 ساعت"
+)
+
+print(
+    "==================================="
+)
 
 
 # =========================
@@ -336,14 +404,21 @@ while True:
     try:
 
         last_post = get_last_post_time()
+
         current_time = time.time()
 
         # بررسی فاصله یک‌ساعته
-        if current_time - last_post < POST_INTERVAL:
+        if (
+            current_time - last_post
+            < POST_INTERVAL
+        ):
 
             remaining = int(
                 POST_INTERVAL
-                - (current_time - last_post)
+                - (
+                    current_time
+                    - last_post
+                )
             )
 
             minutes = remaining // 60
@@ -353,11 +428,16 @@ while True:
                 f"حدود {minutes} دقیقه باقی مانده."
             )
 
-            time.sleep(CHECK_INTERVAL)
+            time.sleep(
+                CHECK_INTERVAL
+            )
 
             continue
 
+        # =========================
         # دریافت خبر
+        # =========================
+
         news = get_news()
 
         if not news:
@@ -366,14 +446,24 @@ while True:
                 "بررسی بعدی 10 دقیقه دیگر..."
             )
 
-            time.sleep(CHECK_INTERVAL)
+            time.sleep(
+                CHECK_INTERVAL
+            )
 
             continue
 
-        # بازنویسی
-        rewritten = rewrite_news(news)
+        # =========================
+        # بازنویسی خبر
+        # =========================
 
+        rewritten = rewrite_news(
+            news
+        )
+
+        # =========================
         # ارسال به بله
+        # =========================
+
         success = send_to_bale(
             rewritten
         )
@@ -387,13 +477,13 @@ while True:
             save_last_post_time()
 
             print(
-                "چرخه انتشار با موفقیت انجام شد."
+                "🎉 چرخه انتشار با موفقیت انجام شد."
             )
 
         else:
 
             print(
-                "ارسال انجام نشد؛ "
+                "⚠️ ارسال انجام نشد؛ "
                 "خبر به عنوان استفاده‌شده ثبت نشد."
             )
 
@@ -401,17 +491,32 @@ while True:
             "بررسی بعدی 10 دقیقه دیگر..."
         )
 
-        time.sleep(CHECK_INTERVAL)
+        time.sleep(
+            CHECK_INTERVAL
+        )
 
     except Exception as e:
 
-        print("===================================")
-        print("❌ ERROR:")
-        print(e)
-        print("===================================")
+        print(
+            "==================================="
+        )
+
+        print(
+            "❌ ERROR:"
+        )
+
+        print(
+            e
+        )
+
+        print(
+            "==================================="
+        )
 
         print(
             "بررسی بعدی 10 دقیقه دیگر..."
         )
 
-        time.sleep(CHECK_INTERVAL)
+        time.sleep(
+            CHECK_INTERVAL
+        )
