@@ -1,8 +1,10 @@
 import os
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import requests
+
 
 TOKEN = os.getenv("BALE_BOT_TOKEN", "").strip()
 CHANNEL = os.getenv("BALE_CHANNEL", "@Yertech").strip()
@@ -18,36 +20,46 @@ PORT = int(os.getenv("PORT", "10000"))
 API_BASE = f"https://tapi.bale.ai/bot{TOKEN}"
 
 
-def send_message(text):
+def send_message():
+
     if not TOKEN:
-        raise RuntimeError("BALE_BOT_TOKEN is not set.")
+        print("ERROR: BALE_BOT_TOKEN is not set.")
+        return
 
     url = f"{API_BASE}/sendMessage"
 
     payload = {
         "chat_id": CHANNEL,
-        "text": text
+        "text": TEST_MESSAGE
     }
 
-    response = requests.post(
-        url,
-        json=payload,
-        timeout=30
-    )
+    try:
 
-    print("Bale API status:", response.status_code)
-    print("Bale API response:", response.text)
-
-    response.raise_for_status()
-
-    data = response.json()
-
-    if not data.get("ok", False):
-        raise RuntimeError(
-            f"Bale API error: {data}"
+        response = requests.post(
+            url,
+            json=payload,
+            timeout=30
         )
 
-    return data
+        print("Bale API status:", response.status_code)
+        print("Bale API response:", response.text)
+
+        if response.status_code != 200:
+            print("WARNING: Bale API returned an error.")
+            return
+
+        data = response.json()
+
+        if not data.get("ok", False):
+            print("WARNING: Bale API did not return ok=true.")
+            print(data)
+            return
+
+        print("SUCCESS: Test message sent to", CHANNEL)
+
+    except Exception as e:
+
+        print("Bale API request failed:", repr(e))
 
 
 class HealthHandler(BaseHTTPRequestHandler):
@@ -91,7 +103,7 @@ def start_http_server():
     )
 
     print(
-        f"HTTP health server listening on port {PORT}"
+        f"HTTP server running on 0.0.0.0:{PORT}"
     )
 
     server.serve_forever()
@@ -100,23 +112,32 @@ def start_http_server():
 def main():
 
     if not TOKEN:
-        raise RuntimeError(
-            "BALE_BOT_TOKEN is not set."
-        )
+        print("WARNING: BALE_BOT_TOKEN is not set.")
 
-    threading.Thread(
+    # Start Render HTTP server first
+    server_thread = threading.Thread(
         target=start_http_server,
         daemon=True
-    ).start()
-
-    print("Yertech AI starting...")
-
-    send_message(TEST_MESSAGE)
-
-    print(
-        "Test message sent successfully to",
-        CHANNEL
     )
+
+    server_thread.start()
+
+    # Give the server a moment to start
+    time.sleep(2)
+
+    print("Yertech AI started.")
+
+    # Send Bale message without killing the web server
+    send_thread = threading.Thread(
+        target=send_message,
+        daemon=True
+    )
+
+    send_thread.start()
+
+    # Keep the main process alive
+    while True:
+        time.sleep(60)
 
 
 if __name__ == "__main__":
