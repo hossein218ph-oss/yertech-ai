@@ -1,20 +1,33 @@
 import os
 import time
 import hashlib
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
 import feedparser
 import requests
 from openai import OpenAI
 
-# =========================
-# تنظیمات
-# =========================
+
+# ==============================
+# Environment Variables
+# ==============================
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 BALE_BOT_TOKEN = os.getenv("BALE_BOT_TOKEN")
 BALE_CHAT_ID = os.getenv("BALE_CHAT_ID")
 
+PORT = int(os.getenv("PORT", 10000))
+
+
+# ==============================
+# Settings
+# ==============================
+
 CHECK_INTERVAL = 10 * 60
 POST_INTERVAL = 60 * 60
+
+CHANNEL_USERNAME = "@yartech"
 
 RSS_FEEDS = [
     "https://techcrunch.com/feed/",
@@ -25,11 +38,10 @@ RSS_FEEDS = [
 STATE_FILE = "state.txt"
 USED_NEWS_FILE = "used_news.txt"
 
-CHANNEL_USERNAME = "@yartech"
 
-# =========================
-# بررسی تنظیمات
-# =========================
+# ==============================
+# Check Environment
+# ==============================
 
 if not GROQ_API_KEY:
     print("❌ GROQ_API_KEY تنظیم نشده است.")
@@ -43,18 +55,54 @@ if not BALE_CHAT_ID:
     print("❌ BALE_CHAT_ID تنظیم نشده است.")
     exit()
 
-# =========================
-# اتصال به Groq
-# =========================
+
+# ==============================
+# Groq Client
+# ==============================
 
 client = OpenAI(
     api_key=GROQ_API_KEY,
     base_url="https://api.groq.com/openai/v1"
 )
 
-# =========================
-# زمان آخرین انتشار
-# =========================
+
+# ==============================
+# Render Health Server
+# ==============================
+
+class HealthHandler(BaseHTTPRequestHandler):
+
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b"Yertech AI is running.")
+
+    def log_message(self, format, *args):
+        return
+
+
+def start_server():
+    server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
+
+    print("===================================")
+    print(f"🌐 Render HTTP server فعال شد روی پورت {PORT}")
+    print("===================================")
+
+    server.serve_forever()
+
+
+server_thread = threading.Thread(
+    target=start_server,
+    daemon=True
+)
+
+server_thread.start()
+
+
+# ==============================
+# State
+# ==============================
 
 def get_last_post_time():
     try:
@@ -69,32 +117,46 @@ def save_last_post_time():
         f.write(str(time.time()))
 
 
-# =========================
-# اخبار استفاده‌شده
-# =========================
+# ==============================
+# Used News
+# ==============================
 
 def get_used_news():
+
     try:
-        with open(USED_NEWS_FILE, "r", encoding="utf-8") as f:
+        with open(
+            USED_NEWS_FILE,
+            "r",
+            encoding="utf-8"
+        ) as f:
+
             return set(
                 line.strip()
                 for line in f
                 if line.strip()
             )
+
     except:
         return set()
 
 
 def save_used_news(news_id):
-    with open(USED_NEWS_FILE, "a", encoding="utf-8") as f:
+
+    with open(
+        USED_NEWS_FILE,
+        "a",
+        encoding="utf-8"
+    ) as f:
+
         f.write(news_id + "\n")
 
 
-# =========================
-# ساخت شناسه خبر
-# =========================
+# ==============================
+# News ID
+# ==============================
 
 def make_news_id(link, title):
+
     value = link + title
 
     return hashlib.md5(
@@ -102,9 +164,9 @@ def make_news_id(link, title):
     ).hexdigest()
 
 
-# =========================
-# دریافت اخبار RSS
-# =========================
+# ==============================
+# Get News
+# ==============================
 
 def get_news():
 
@@ -120,13 +182,9 @@ def get_news():
 
         try:
 
-            print(
-                f"Checking RSS: {feed_url}"
-            )
+            print(f"Checking RSS: {feed_url}")
 
-            feed = feedparser.parse(
-                feed_url
-            )
+            feed = feedparser.parse(feed_url)
 
             for entry in feed.entries[:10]:
 
@@ -177,7 +235,6 @@ def get_news():
 
         return None
 
-    # انتخاب اولین خبر جدید
     news = all_news[0]
 
     print("===================================")
@@ -188,9 +245,9 @@ def get_news():
     return news
 
 
-# =========================
-# بازنویسی خبر با Groq
-# =========================
+# ==============================
+# Rewrite News With Groq
+# ==============================
 
 def rewrite_news(news):
 
@@ -198,9 +255,7 @@ def rewrite_news(news):
         "در حال بازنویسی خبر با Groq..."
     )
 
-    print(
-        "==================================="
-    )
+    print("===================================")
 
     prompt = f"""
 تو نویسنده حرفه‌ای یک کانال فناوری فارسی هستی.
@@ -246,49 +301,45 @@ def rewrite_news(news):
 """
 
     response = client.chat.completions.create(
+
         model="openai/gpt-oss-120b",
+
         messages=[
             {
                 "role": "user",
                 "content": prompt
             }
         ],
+
         temperature=0.7,
+
         max_tokens=700
     )
 
-    rewritten = response.choices[0].message.content.strip()
+    rewritten = (
+        response
+        .choices[0]
+        .message
+        .content
+        .strip()
+    )
 
-    # =========================
     # اضافه کردن آیدی کانال
-    # =========================
-
     rewritten += (
         f"\n\n📢 {CHANNEL_USERNAME}"
     )
 
-    print(
-        "==================================="
-    )
-
-    print(
-        "بازنویسی با موفقیت انجام شد."
-    )
-
-    print(
-        "آیدی کانال به انتهای پست اضافه شد."
-    )
-
-    print(
-        "==================================="
-    )
+    print("===================================")
+    print("بازنویسی با موفقیت انجام شد.")
+    print("آیدی کانال به انتهای پست اضافه شد.")
+    print("===================================")
 
     return rewritten
 
 
-# =========================
-# ارسال پیام به بله
-# =========================
+# ==============================
+# Send To Bale
+# ==============================
 
 def send_to_bale(message):
 
@@ -325,17 +376,11 @@ def send_to_bale(message):
 
             if data.get("ok") is True:
 
-                print(
-                    "==================================="
-                )
-
+                print("===================================")
                 print(
                     "پست با موفقیت در بله منتشر شد."
                 )
-
-                print(
-                    "==================================="
-                )
+                print("===================================")
 
                 return True
 
@@ -358,46 +403,24 @@ def send_to_bale(message):
         return False
 
 
-# =========================
-# شروع برنامه
-# =========================
+# ==============================
+# Start Bot
+# ==============================
 
-print(
-    "==================================="
-)
-
-print(
-    "🚀 فناوری‌یار شروع شد."
-)
-
-print(
-    "🤖 AI Engine: Groq"
-)
-
-print(
-    "📰 RSS: Active"
-)
-
-print(
-    "📢 Bale: Active"
-)
-
-print(
-    "📢 Channel: @yartech"
-)
-
-print(
-    "⏰ فاصله انتشار: 1 ساعت"
-)
-
-print(
-    "==================================="
-)
+print("===================================")
+print("🚀 فناوری‌یار شروع شد.")
+print("🤖 AI Engine: Groq")
+print("📰 RSS: Active")
+print("📢 Bale: Active")
+print("📢 Channel: @yartech")
+print("🌐 Render Port: Active")
+print("⏰ فاصله انتشار: 1 ساعت")
+print("===================================")
 
 
-# =========================
-# حلقه اصلی
-# =========================
+# ==============================
+# Main Loop
+# ==============================
 
 while True:
 
@@ -407,7 +430,6 @@ while True:
 
         current_time = time.time()
 
-        # بررسی فاصله یک‌ساعته
         if (
             current_time - last_post
             < POST_INTERVAL
@@ -434,9 +456,6 @@ while True:
 
             continue
 
-        # =========================
-        # دریافت خبر
-        # =========================
 
         news = get_news()
 
@@ -452,21 +471,13 @@ while True:
 
             continue
 
-        # =========================
-        # بازنویسی خبر
-        # =========================
 
-        rewritten = rewrite_news(
-            news
-        )
-
-        # =========================
-        # ارسال به بله
-        # =========================
+        rewritten = rewrite_news(news)
 
         success = send_to_bale(
             rewritten
         )
+
 
         if success:
 
@@ -487,6 +498,7 @@ while True:
                 "خبر به عنوان استفاده‌شده ثبت نشد."
             )
 
+
         print(
             "بررسی بعدی 10 دقیقه دیگر..."
         )
@@ -495,23 +507,13 @@ while True:
             CHECK_INTERVAL
         )
 
+
     except Exception as e:
 
-        print(
-            "==================================="
-        )
-
-        print(
-            "❌ ERROR:"
-        )
-
-        print(
-            e
-        )
-
-        print(
-            "==================================="
-        )
+        print("===================================")
+        print("❌ ERROR:")
+        print(e)
+        print("===================================")
 
         print(
             "بررسی بعدی 10 دقیقه دیگر..."
